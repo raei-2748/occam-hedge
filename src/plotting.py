@@ -174,3 +174,71 @@ def plot_robust_compare_regime0(frontier_data: pd.DataFrame, out_path: Path):
     plt.savefig(out_path, dpi=200)
     plt.close()
     print(f"Saved figure: {out_path}")
+    
+def plot_turnover_concentration(diag_data: list, out_path: Path):
+    """
+    Plots turnover concentration by volume quintile under stress.
+    diag_data: list of dicts {rep, beta, volume, turnover} (arrays)
+    """
+    import pandas as pd
+    
+    # Flatten data
+    rows = []
+    for item in diag_data:
+        rep = item["representation"]
+        beta = item["beta"]
+        vols = np.array(item["volume"])
+        turns = np.array(item["turnover"])
+        
+        # Create a DF
+        df_tmp = pd.DataFrame({"vol": vols, "turn": turns})
+        # Quintiles
+        try:
+            df_tmp["quintile"] = pd.qcut(df_tmp["vol"], 5, labels=False)
+        except ValueError:
+            # Handle degenerate case if vol constant
+            df_tmp["quintile"] = 0
+            
+        # Mean turnover per quintile
+        means = df_tmp.groupby("quintile")["turn"].mean()
+        
+        for q, val in means.items():
+            rows.append({
+                "representation": rep,
+                "beta": beta,
+                "quintile": q,
+                "turnover": val
+            })
+            
+    df_agg = pd.DataFrame(rows)
+    # Average across seeds if multiple entries per (rep, beta)
+    df_plot = df_agg.groupby(["representation", "beta", "quintile"])["turnover"].mean().reset_index()
+    
+    # Plotting
+    reps = df_plot["representation"].unique()
+    fig, axes = plt.subplots(1, len(reps), figsize=(4*len(reps), 4), sharey=True)
+    if len(reps) == 1: axes = [axes]
+    
+    for i, rep in enumerate(reps):
+        ax = axes[i] if len(reps) > 1 else axes[0]
+        subset = df_plot[df_plot["representation"] == rep]
+        
+        # Plot line for each beta
+        betas = sorted(subset["beta"].unique())
+        for beta in betas:
+            line = subset[subset["beta"] == beta]
+            ax.plot(line["quintile"], line["turnover"], marker='o', label=f"beta={beta}")
+            
+        ax.set_title(rep)
+        ax.set_xlabel("Volume Quintile (0=Low, 4=High)")
+        if i==0: ax.set_ylabel("Mean Turnover")
+        ax.legend(fontsize='small')
+        ax.grid(True, alpha=0.3)
+        
+    fig.suptitle("Turnover Concentration by Volume (Stressed Regime)")
+    fig.tight_layout()
+    
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+    print(f"Saved figure: {out_path}")
