@@ -1,0 +1,30 @@
+{
+  "config": {
+    "gamma": 0.95,
+    "stress_eta": 0.1,
+    "train_eta": 0.05,
+    "n_steps": 100,
+    "n_paths_train": 1500,
+    "n_paths_eval": 3000
+  },
+  "results": [
+    {
+      "representation": "greeks",
+      "beta": 0.0,
+      "R0": 14.86826646330292,
+      "R_stress": 24.02262545697455,
+      "info_cost": 18.25072877608898,
+      "turnover": 0.03181623172739539,
+      "exec_cost": 0.00014949640101632677
+    },
+    {
+      "representation": "micro",
+      "beta": 0.0,
+      "R0": 28.741618766151422,
+      "R_stress": 49.97874833104512,
+      "info_cost": 2.1312084799766313,
+      "turnover": 0.1298035802290623,
+      "exec_cost": 0.0018060100694781327
+    }
+  ]
+}
