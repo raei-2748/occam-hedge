@@ -13,6 +13,7 @@ from experiment_occam import hedge_on_paths, train_weights
 from world import simulate_heston_signflip
 from risk import robust_es_kl
 from paper_config import load_config, run_id_from_config
+from utils import set_seeds
 
 
 def main():
@@ -25,7 +26,7 @@ def main():
 
     base_seed = int(cfg["seed_train"])
     eval_seed = int(cfg["seed_eval"])
-    np.random.seed(base_seed)
+    set_seeds(base_seed)
 
     betas = np.array(cfg["beta_grid"], dtype=float)
     representations = list(cfg["representations"])

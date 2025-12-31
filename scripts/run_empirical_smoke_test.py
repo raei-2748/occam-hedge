@@ -12,6 +12,7 @@ from experiment_occam import hedge_on_paths, train_weights
 from world import simulate_heston_signflip
 from risk import robust_es_kl
 from paper_config import load_config, run_id_from_config
+from utils import set_seeds
 
 
 def _train_and_eval(
@@ -78,7 +79,7 @@ def main():
     smoke_cfg = cfg["smoke"]
     base_seed = int(smoke_cfg["seed"])
     eval_seed = int(cfg["seed_eval"])
-    np.random.seed(base_seed)
+    set_seeds(base_seed)
 
     gamma = float(cfg["gamma"])
     stress_eta = float(cfg["stress_eta"])

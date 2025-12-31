@@ -74,7 +74,9 @@ def optimize_q_es(losses: np.ndarray, gamma: float, q_grid: np.ndarray | None = 
     if not 0.0 < gamma < 1.0:
         raise ValueError("gamma must be in (0, 1)")
     if q_grid is None:
+        # Default behavior: sample quantile
         return float(np.quantile(losses, gamma))
+    
     q_grid = np.asarray(q_grid, dtype=float)
     if q_grid.size == 0:
         raise ValueError("q_grid must contain values")
@@ -116,3 +118,43 @@ def robust_es_kl(
         lq = es_loss(losses, float(q), gamma)
         vals.append(robust_expectation(lq, eta=eta, lambdas=lambdas))
     return float(np.min(vals))
+
+
+# --- Torch Support ---
+try:
+    import torch
+    
+    def robust_risk_torch(
+        losses: torch.Tensor, 
+        eta: float, 
+        lambdas: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Differentiable Robust Risk (KL-stress) using Torch.
+        losses: (B,)
+        lambdas: (N_lam,)
+        Returns scalar tensor.
+        """
+        # (N_lam, B)
+        scaled = lambdas.unsqueeze(1) * losses.unsqueeze(0)
+        
+        # log_mean_exp over batch (dim 1)
+        # LME = log(mean(exp(X))) = log(sum(exp(X))) - log(N)
+        lse = torch.logsumexp(scaled, dim=1) # (N_lam,)
+        lme = lse - np.log(losses.shape[0])
+        
+        # Dual function: g(lam) = (lme + eta) / lam
+        g = (lme + eta) / lambdas
+        
+        # Return min over lambdas
+        return torch.min(g)
+
+    def es_loss_torch(losses: torch.Tensor, q: torch.Tensor, gamma: float) -> torch.Tensor:
+        """
+        Sample-wise ES loss: q + (1/(1-gamma)) * max(0, L - q)
+        Returns vector of same shape as losses.
+        """
+        return q + (1.0 / (1.0 - gamma)) * torch.nn.functional.relu(losses - q)
+
+except ImportError:
+    pass
