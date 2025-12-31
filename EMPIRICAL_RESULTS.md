@@ -2,88 +2,75 @@
 
 This directory contains the essential research outputs for the paper's empirical section.
 
-## Essential Files
+## 🚀 Reproducing Results
 
-### Figures (for Publication)
-Located in `figures/`:
+To generate all paper artifacts (tables, figures, JSONs) deterministically using the research-grade pipeline:
 
-1. **`paper_417a4aa7_frontier_beta_sweep.png`** - Robustness-Information Frontier
-   - Shows R₀ vs R_η trade-off colored by information cost
-   - Used in: Main results section
-   
-2. **`paper_417a4aa7_robust_risk_vs_eta.png`** - Robust Risk Curves
-   - Shows R_η vs η for different β values and representations
-   - Used in: Robustness analysis section
-   
-3. **`paper_417a4aa7_robust_compare_regime0.png`** - Regime Comparison
-   - Compares policy performance in baseline regime
-   - Used in: Baseline validation section
-   
-4. **`paper_417a4aa7_semantic_flip_correlations.png`** - Semantic Flip Analysis
-   - Shows volume-impact correlation flip between regimes
-   - Used in: Mechanism validation section
+```bash
+# Full reproduction (5 seeds, ~1-2 hours)
+python scripts/run_paper.py --config configs/paper_run.json --seeds 5
 
-### Results Data
-Located in `runs/`:
+# Fast test run (2 seeds, ~5 mins)
+python scripts/run_paper.py --config configs/paper_test.json --seeds 2 --output_dir runs/paper_example
+```
 
-1. **`paper_417a4aa7_frontier.csv`** - Main Results Table
-   - Columns: representation, beta, R0, R_stress_eta0p1, info_cost, turnover, exec_cost
-   - 30 rows: 3 representations × 10 β values
-   
-2. **`paper_417a4aa7_robust_curves.json`** - Detailed Robust Curves
-   - R_η values for η ∈ [0.0, 0.05, 0.1, 0.2]
-   - 9 curves: 3 representations × 3 β values
-   
-3. **`paper_417a4aa7_smoke_results.json`** - Baseline Validation
-   - Quick sanity check results (greeks vs micro)
-   
-4. **`paper_417a4aa7_semantic_flip_summary.json`** - Regime Shift Evidence
-   - Volume-impact correlations in both regimes
+This will create a directory in `runs/paper_<timestamp>_<hash>/` containing:
+- **aggregated CSV/JSON**: `paper_frontier.csv`, `paper_robust_curves.json`
+- **final figures**: `fig_*.png`
+- **metadata**: `config_resolved.json`, `metadata.json`
 
-### Reproducibility Metadata
-Located in `runs/20251231_124320_417a4aa7/`:
+---
 
-- `config_resolved.json` - Exact parameters used
-- `metadata.json` - Git commit, timestamp, device info
-- `metrics.jsonl` - Epoch-by-epoch training logs
-- `results.json` - Full evaluation results
+## 📊 Paper Figures
 
-## Key Results Summary
+### 1. Robustness-Information Frontier (`fig_frontier_beta_sweep.png`)
+- **X-axis**: Baseline Risk ($R_0$) - Standard Expected Shortfall (ES) at $\eta=0$
+- **Y-axis**: Stressed Risk ($R_\eta$) - Robust ES at stress level $\eta=0.1$
+- **Color**: Information Cost (KL divergence from prior)
+- **Insight**: Lower information cost (darker) generally leads to lower stressed risk for the same baseline performance.
+- **Band Version**: `fig_frontier_band.png` shows error bars (std dev across seeds).
 
-### Main Finding
-Higher β penalty → Lower information cost → Flatter robust risk curve
+### 2. Robust Risk Curves (`fig_robust_risk_vs_eta.png`)
+- **X-axis**: Stress Level ($\eta$)
+- **Y-axis**: Robust Risk ($R_\eta$)
+- **Insight**: Microstructure-only representations degrade faster (steeper slope) than Combined or Greeks.
+- **Band Version**: `fig_robust_risk_vs_eta_band.png` shows shaded error bands (std dev).
 
-| Representation | β Range | Info Reduction | Robustness Gain |
-|----------------|---------|----------------|-----------------|
-| Greeks         | 0→1.0   | -14.2%         | Baseline stable |
-| Micro          | 0→1.0   | -16.7%         | High fragility  |
-| Combined       | 0→1.0   | -15.1%         | Best robustness |
+### 3. Regime Comparison (`fig_robust_compare_regime0.png`)
+- Bar chart comparing Baseline vs Stressed performance for unpenalized policies ($\beta=0$).
+- Shows the "fragility gap" for each representation.
 
-### Paper Claims Supported
+### 4. Semantic Flip (`fig_semantic_flip_correlations.png`)
+- Histograms of Volume vs Impact correlation in Regime 0 vs Regime 1.
+- **Insight**: Correlation flips sign (+ vs -), proving semantic instability.
 
-✓ **Claim 1:** Microstructure-heavy policies are more fragile under stress
-  - Evidence: `robust_curves.json` shows micro has highest R_η growth
+---
 
-✓ **Claim 2:** Information penalty improves robustness
-  - Evidence: `frontier.csv` shows β=1.0 has lower stress lift than β=0
+## 📈 Aggregated Data
 
-✓ **Claim 3:** Combined representation balances baseline and robust performance
-  - Evidence: `frontier.csv` shows combined achieves lowest R_stress_eta0p1
+- **`paper_frontier.csv`**:
+  - `beta`: Information penalty coefficient
+  - `R0`: Baseline Expected Shortfall (mean across seeds)
+  - `R_stress_eta0p1`: Stressed Robust ES (mean across seeds)
+  - `info_cost`: Information cost (mean)
+  - `turnover`: Trading turnover
+  - `*_std`: Standard deviation columns for error bars
 
-✓ **Claim 4:** Volume-impact correlation flips between regimes
-  - Evidence: `semantic_flip_summary.json` shows ρ: -0.65 → +0.58
+- **`paper_robust_curves.json`**:
+  - Detailed $R_\eta$ values for plotting full curves
+  - Contains means and std devs for each $(\beta, \eta)$ point.
 
-## Archived Files
+---
 
-Non-essential development artifacts moved to `archive/`:
-- `archive/diagnostics/` - Development reports (BETA_*.md, AGENTS.md, etc.)
-- `archive/old_runs/` - Intermediate/duplicate result files
-- `archive/old_figures/` - Old plots without paper_ prefix
+## 🧪 Metrics Explained
 
-To delete archived files: `rm -rf archive/`
+- **Baseline Risk ($R_0$)**: Standard CVaR/Expected Shortfall on the training distribution (Regime 0).
+- **Stressed Risk ($R_\eta$)**: Worst-case Expected Shortfall within a KL-divergence ball of radius $\eta$ around the training distribution. This calculates risk under optimal adversarial shifts.
+- **Information Cost**: The KL divergence between the policy's action distribution and a prior (Greeks-only baseline). Measures "how much" the model relies on extra features.
 
-## Citation
+## 🛡️ Guardrails
 
-When using these results, cite the configuration hash: `417a4aa7`
-
-This ensures reproducibility with the exact parameters in `config_resolved.json`.
+The pipeline enforces:
+1. **Artifact Consistency**: Figures are generated *only* from the saved aggregated data.
+2. **$\beta$ Efficacy**: Runtime checks ensure that increasing $\beta$ significantly reduces information cost and changes model weights.
+3. **Reproducibility**: `metadata.json` records git commit, platform info, and exact config.

@@ -1,0 +1,331 @@
+
+import argparse
+import json
+import csv
+import sys
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from datetime import datetime
+import torch
+import platform
+import subprocess
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT / "src"))
+
+from experiment_occam import hedge_on_paths, train_weights
+from world import simulate_heston_signflip
+from risk import robust_es_kl
+from paper_config import load_config, run_id_from_config
+from utils import set_seeds
+from plotting import (
+    plot_frontier_beta_sweep,
+    plot_robust_risk_vs_eta,
+    plot_semantic_flip_correlations,
+    plot_robust_compare_regime0
+)
+
+def get_git_revision_hash() -> str:
+    try:
+        return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
+    except Exception:
+        return "unknown"
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default=str(ROOT / "configs" / "paper_run.json"))
+    parser.add_argument("--seeds", type=int, default=5, help="Number of seeds to run")
+    parser.add_argument("--output_dir", type=str, default=None, help="Force specific output directory")
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    run_hash = run_id_from_config(cfg)
+    
+    # Setup Output Directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if args.output_dir:
+        run_dir = Path(args.output_dir)
+    else:
+        run_dir = ROOT / "runs" / f"paper_{timestamp}_{run_hash}"
+    
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"Starting Paper Run")
+    print(f"Run ID: {run_hash}")
+    print(f"Directory: {run_dir}")
+    print(f"Seeds: {args.seeds}")
+
+    # --- 1. CONFIG & METADATA ---
+    with open(run_dir / "config_resolved.json", "w") as f:
+        json.dump(cfg, f, indent=2)
+        
+    metadata = {
+        "timestamp": timestamp,
+        "run_id": run_hash,
+        "git_commit": get_git_revision_hash(),
+        "python_version": sys.version,
+        "platform": platform.platform(),
+        "torch_version": torch.__version__,
+        "device": "cuda" if torch.cuda.is_available() else "cpu",
+        "seeds_count": args.seeds
+    }
+    with open(run_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    # --- 2. EXPERIMENT SETUP ---
+    # Common Parameters
+    n_steps = int(cfg["n_steps"])
+    T = float(cfg["T"])
+    K = float(cfg["K"])
+    vol_hat = float(cfg["vol_hat"])
+    gamma = float(cfg["gamma"])
+    train_eta = float(cfg["train_eta"])
+    stress_eta_frontier = float(cfg.get("stress_eta", 0.1)) # for frontier plot
+    train_lambdas = np.array(cfg["train_lambdas"], dtype=float)
+    
+    eta_grid_curves = np.array(cfg["eta_grid"], dtype=float)
+    beta_grid = np.array(cfg["beta_grid"], dtype=float)          # For Frontier (fine grid)
+    beta_grid_curves = np.array(cfg["beta_grid_curves"], dtype=float) # For Curves (sparse grid)
+    
+    # We will run the union of beta grids to avoid duplicating work, 
+    # but strictly we can just run everything in nested loops.
+    # To keep distinct artifacts clean, let's collect all raw results first.
+    
+    all_raw_results = []
+    semantic_flips = {"n_trials": 0, "corr_regime0": [], "corr_regime1": []}
+
+    # Seeds Loop
+    # We use base_seed from config + i
+    base_seed_train = int(cfg["seed_train"])
+    base_seed_eval = int(cfg["seed_eval"])
+    
+    for seed_idx in range(args.seeds):
+        current_train_seed = base_seed_train + seed_idx
+        current_eval_seed = base_seed_eval + seed_idx
+        
+        print(f"\n--- Seed {seed_idx+1}/{args.seeds} [Train={current_train_seed}, Eval={current_eval_seed}] ---")
+        
+        # 2a. Data Generation
+        set_seeds(current_train_seed)
+        S_train, _, V_train, lam_train, _ = simulate_heston_signflip(
+            regime=0, n_paths=int(cfg["n_paths_train"]), n_steps=n_steps, T=T, seed=current_train_seed
+        )
+        
+        set_seeds(current_eval_seed)
+        S_eval, _, V_eval, lam_eval, _ = simulate_heston_signflip(
+            regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed
+        )
+        
+        # 2b. Semantic Flip Check (Regime 0 vs Regime 1)
+        # Generate a small Regime 1 batch for correlation check
+        S_stress, _, V_stress, lam_stress, _ = simulate_heston_signflip(
+            regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999
+        )
+        
+        # Calculate correlations (Volume vs Lambda)
+        # Helper to compute flatten correlation
+        def calc_corr(V, L):
+            return np.corrcoef(V.flatten(), L.flatten())[0, 1]
+            
+        corr0 = calc_corr(V_eval, lam_eval)
+        corr1 = calc_corr(V_stress, lam_stress)
+        
+        semantic_flips["n_trials"] += 1
+        semantic_flips["corr_regime0"].append(float(corr0))
+        semantic_flips["corr_regime1"].append(float(corr1))
+        
+        # 2c. Training Loop
+        representations = list(cfg["representations"])
+        
+        # We need to run for all unique betas involved in either frontier or curves
+        all_betas = sorted(list(set(beta_grid) | set(beta_grid_curves)))
+        
+        for rep in representations:
+            # Track fingerprints for guardrail
+            fingerprints = {}
+            info_costs = {}
+            
+            for beta in all_betas:
+                # Train
+                w = train_weights(
+                    S_train, V_train, lam_train, T, K, vol_hat,
+                    rep, float(beta), train_eta, train_lambdas, gamma,
+                    n_epochs=int(cfg.get("n_epochs", 150)),
+                    warmup_epochs=int(cfg.get("warmup_epochs", 30))
+                )
+                
+                # Fingerprint
+                import hashlib
+                fp = hashlib.sha256(w.tobytes()).hexdigest()
+                fingerprints[beta] = fp
+                
+                # Eval on Regime 0
+                losses, info_cost, turnover, exec_cost = hedge_on_paths(
+                    S_eval, V_eval, lam_eval, T, K, vol_hat, rep, w
+                )
+                info_costs[beta] = info_cost
+                
+                # Calculate metrics for Frontier
+                r0 = robust_es_kl(losses, eta=0.0, gamma=gamma)
+                r_stress_frontier = robust_es_kl(losses, eta=stress_eta_frontier, gamma=gamma)
+                
+                # Calculate metrics for Curves (all etas)
+                r_curve_vals = [robust_es_kl(losses, eta=e, gamma=gamma) for e in eta_grid_curves]
+                
+                record = {
+                    "seed_idx": seed_idx,
+                    "representation": rep,
+                    "beta": float(beta),
+                    "info_cost": float(info_cost),
+                    "turnover": float(turnover),
+                    "exec_cost": float(exec_cost),
+                    "R0": float(r0),
+                    "R_stress_eta0p1": float(r_stress_frontier),
+                    "R_eta_curve": [float(r) for r in r_curve_vals], # List matching eta_grid
+                    "model_fingerprint": fp
+                }
+                all_raw_results.append(record)
+                
+            # --- GUARDRAIL CHECK PER REPRESENTATION PER SEED ---
+            # Compare min beta vs max beta
+            min_beta = min(all_betas)
+            max_beta = max(all_betas)
+            
+            if min_beta != max_beta:
+                 # Check Fingerprint
+                 if fingerprints[min_beta] == fingerprints[max_beta]:
+                     raise RuntimeError(f"GUARDRAIL FAIL: Model fingerprint identical for {rep} beta={min_beta} vs {max_beta}. Beta is ineffective!")
+                 
+                 # Check Info Cost Drop (expecting lower info cost for higher beta)
+                 # Tolerance: 2% drop
+                 drop_pct = (info_costs[min_beta] - info_costs[max_beta]) / (info_costs[min_beta] + 1e-9)
+                 print(f"  [{rep}] Info Cost Drop (beta {min_beta}->{max_beta}): {drop_pct*100:.2f}%")
+                 
+                 # Note: Greeks might not drop much if it's already low info, but usually it does. 
+                 # Combined and Micro MUST drop.
+                 if rep in ["combined", "micro"] and drop_pct < 0.02:
+                     raise RuntimeError(f"GUARDRAIL FAIL: Info cost did not drop significantly (>2%) for {rep}. Drop was {drop_pct:.4f}")
+
+    # --- 3. AGGREGATION & SAVING ---
+    df = pd.DataFrame(all_raw_results)
+    
+    # Save Raw Data
+    df.to_csv(run_dir / "raw_results.csv", index=False)
+    with open(run_dir / "paper_semantic_flip_summary.json", "w") as f:
+        json.dump(semantic_flips, f, indent=2)
+
+    # 3a. Frontier Data (Aggregation)
+    # Filter for betas in beta_grid
+    frontier_df = df[df["beta"].isin(beta_grid)].copy()
+    
+    # Group by Rep, Beta -> Mean/Std
+    agg_cols = ["R0", "R_stress_eta0p1", "info_cost", "turnover", "exec_cost"]
+    frontier_agg = frontier_df.groupby(["representation", "beta"])[agg_cols].agg(["mean", "std"]).reset_index()
+    
+    # Flatten columns
+    frontier_agg.columns = ['_'.join(col).strip() if col[1] else col[0] for col in frontier_agg.columns.values]
+    # Rename for compatibility with plotting (plotting expects "R0", "R0_std" etc)
+    # The default pandas name e.g. "R0_mean".
+    # I'll normalize columns to: R0, R0_std, etc.
+    rename_map = {f"{c}_mean": c for c in agg_cols}
+    rename_map.update({f"{c}_std": f"{c}_std" for c in agg_cols})
+    frontier_agg.rename(columns=rename_map, inplace=True)
+    
+    frontier_agg.to_csv(run_dir / "paper_frontier.csv", index=False)
+    
+    # 3b. Robust Curves Data (Aggregation)
+    # Filter for betas in beta_grid_curves
+    curves_df = df[df["beta"].isin(beta_grid_curves)].copy()
+    
+    curves_export = []
+    
+    # We need to aggregate the array column "R_eta_curve"
+    # One way: expand it, or just iterate groups
+    for (rep, beta), group in curves_df.groupby(["representation", "beta"]):
+        # stack arrays -> (N_seeds, N_etas)
+        stack = np.stack(group["R_eta_curve"].values)
+        means = np.mean(stack, axis=0)
+        stds = np.std(stack, axis=0)
+        
+        curves_export.append({
+            "representation": rep,
+            "beta": float(beta),
+            "etas": eta_grid_curves.tolist(),
+            "R_eta_mean": means.tolist(),
+            "R_eta_std": stds.tolist()
+        })
+        
+    with open(run_dir / "paper_robust_curves.json", "w") as f:
+        json.dump({"results": curves_export}, f, indent=2)
+        
+    # 3c. Smoke Results (Just a subset for quick check, e.g. first seed)
+    # We can just aggregate means for smoke check
+    smoke_results = []
+    for rep in ["greeks", "micro"]:
+        subset = frontier_agg[ (frontier_agg["representation"]==rep) & (frontier_agg["beta"]==0.0) ]
+        if not subset.empty:
+            smoke_results.append({
+                "representation": rep,
+                "R0": float(subset.iloc[0]["R0"]),
+                "R_stress": float(subset.iloc[0]["R_stress_eta0p1"])
+            })
+            
+    with open(run_dir / "paper_smoke_results.json", "w") as f:
+        json.dump(smoke_results, f, indent=2)
+
+    # --- 4. PLOTTING ---
+    print("\nGenerating Figures...")
+    
+    # Fig 1: Frontier
+    plot_frontier_beta_sweep(
+        frontier_agg, 
+        run_dir / "fig_frontier_beta_sweep.png"
+    )
+    # Fig 1b: Frontier (Band) - plot function handles std if present
+    plot_frontier_beta_sweep(
+        frontier_agg, 
+        run_dir / "fig_frontier_band.png"
+    )
+    
+    # Fig 2: Robust Curves
+    plot_robust_risk_vs_eta(
+        curves_export,
+        run_dir / "fig_robust_risk_vs_eta.png",
+        use_bands=False
+    )
+    # Fig 2b: Robust Curves (Band)
+    plot_robust_risk_vs_eta(
+        curves_export,
+        run_dir / "fig_robust_risk_vs_eta_band.png",
+        use_bands=True
+    )
+    
+    # Fig 3: Regime Comparison
+    plot_robust_compare_regime0(
+        frontier_agg,
+        run_dir / "fig_robust_compare_regime0.png"
+    )
+    
+    # Fig 4: Semantic Flip
+    plot_semantic_flip_correlations(
+        semantic_flips,
+        run_dir / "fig_semantic_flip_correlations.png"
+    )
+
+    print(f"\nSUCCESS: Paper Run Complete.")
+    print(f"Results saved to: {run_dir}")
+    
+    # Copy figures to ROOT/figures for paper.tex stability
+    import shutil
+    final_figures_dir = ROOT / "figures"
+    final_figures_dir.mkdir(exist_ok=True)
+    
+    print("\nUpdating stable figures in figures/...")
+    for fig_file in run_dir.glob("fig_*.png"):
+        dest = final_figures_dir / fig_file.name
+        shutil.copy2(fig_file, dest)
+        print(f"  -> {dest.name}")
+
+if __name__ == "__main__":
+    main()

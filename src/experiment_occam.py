@@ -314,6 +314,7 @@ def train_weights(
     train_eta: float,
     train_lambdas: np.ndarray,
     gamma: float,
+    **kwargs
 ) -> np.ndarray:
     """
     Backward-compatible wrapper for Torch-based `train_model`.
@@ -342,6 +343,8 @@ def train_weights(
         "n_epochs": 150, 
         "warmup_epochs": 30
     }
+    # Update with overrides
+    cfg.update(kwargs)
     
     # 4. Train
     res = train_model(model, S_t, V_t, lam_t, cfg, representation, T, K, vol_hat)

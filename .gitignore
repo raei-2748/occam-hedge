@@ -3,4 +3,13 @@ venv/
 .pytest_cache/
 __pycache__/
 .DS_Store
-runs/
+
+# Ignore all runs by default
+runs/**
+
+# Except the paper-grade minimal example
+!runs/paper_example/
+!runs/paper_example/**
+
+# Ignore archive folder (diagnostic history)
+archive/

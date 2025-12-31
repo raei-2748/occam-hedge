@@ -2,6 +2,22 @@
 
 Minimal research prototype for Occam's Hedge under relative-entropy uncertainty. The simulator exposes a regime-dependent sign flip in microstructure signals and evaluates hedging policies under KL stress anchored on Regime 0.
 
+## 🚀 Quick Start
+
+### Reproduce Paper Results
+Generate all figures and tables with a single command:
+```bash
+python scripts/run_paper.py --config configs/paper_run.json --seeds 5
+```
+Results will be saved to `runs/paper_<timestamp>_<hash>/`.
+
+### Run Tests
+```bash
+python -m pytest tests/
+```
+
+### Installation
+
 ## Run
 
 Activate the local venv, then run from repo root:
