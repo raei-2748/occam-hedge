@@ -7,10 +7,11 @@
 \usepackage{amsmath}
 \usepackage{fancyhdr}
 \usepackage{hyperref}
-\usepackage{geometry}
 \usepackage{amsthm}
-
-\usepackage{amsthm}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\usepackage[T1]{fontenc}
+\usepackage{textcomp}
 
 \newtheoremstyle{uprightprop} % name
   {6pt}{6pt}                  % space above/below
@@ -24,8 +25,6 @@
 \theoremstyle{uprightprop}
 \newtheorem{proposition}{Proposition}[section]
 
-
-
 \title{Occam’s Hedge under Relative Entropy Uncertainty}
 \author{Ray Wang}
 \affil{Knox Grammar School}
@@ -35,126 +34,182 @@
 \begin{document}
 \maketitle
 
+\begin{abstract}
+We study robustness of deep hedging policies with execution costs under regime shifts in which microstructure proxies can invert economic meaning. We formalize this failure mode as \emph{semantic inversion}: a feature whose effect on marginal execution costs changes sign across regimes. Robustness is evaluated via worst-case tail risk over Kullback--Leibler bounded neighborhoods of the training path measure, yielding stress-severity indexed robustness curves. 
+
+We propose \emph{Occam’s Hedge}, which constrains representation bandwidth using a variational KL-to-prior penalty, limiting reliance on regime-contingent microstructure detail. In a controlled regime-switching simulator engineered to induce inversion in the activity--impact channel, microstructure-heavy policies exhibit substantially larger stress degradation than payoff-anchored (Greek-based) policies. Tightening the information budget reduces turnover, mitigates degradation, and flattens robustness curves, producing an explicit robustness--information frontier.
+\end{abstract}
+
+\noindent\textbf{Keywords:} deep hedging; execution costs; model risk; distributional robustness; information bottleneck; market microstructure.\\
+\textbf{JEL Codes:} G13; C61; G11.
 
 \section{Introduction}
+Deep hedging's flexibility to condition on rich information sets creates a Lucas Critique vulnerability: microstructure signals that improve in-sample hedging performance can exhibit regime-dependent meaning that inverts under stress \citep{buehler2019deep, Lucas1976}. When a policy learns that high trading volume predicts low execution costs (a correlation that holds in liquid markets), it concentrates activity in precisely those states where funding constraints transform volume from a proxy for depth into a marker of distressed liquidation \citep{easley2012vpin,brunnermeier2009liquidity,duffie2020intermediation}. This is more than classical statistical overfitting. It reflects a structural incentive of empirical risk minimization: any correlation that reduces training loss is rewarded, even if that correlation is an equilibrium outcome tied to a particular liquidity regime. When intermediation constraints bind, microstructure-heavy hedges can concentrate trading in states where marginal execution costs are highest.
 
-Deep hedging reframes dynamic hedging with frictions as a high-dimensional stochastic control problem, learned from simulated market paths by parameterizing trading decisions with flexible function approximators \citep{buehler2019deep}. A practical implication is that one can condition hedging actions on an expansive information set, including market microstructure signals intended to proxy execution quality. This flexibility can improve in-sample performance, but it introduces a specific failure mode under regime shifts inspired by Lucas Critique: the same observed signal can change economic meaning, so the relationship between features and execution costs may not merely weaken but invert. Trading volume is a canonical example. In calm markets, elevated volume can coincide with depth and low price impact; in stress, the same volume can coincide with forced selling, adverse selection, and toxic flow \citep{easley2012vpin,kyle1985continuous}. A policy trained to treat ``high volume'' as ``cheap to trade'' can therefore fail precisely when execution deteriorates.
+Standard scenario stress tests do not quantify this vulnerability. A handful of historical crises may reveal isolated breakdowns, but they provide neither a comparable notion of robustness across policies nor an indication of how far the market can drift before performance degrades. We therefore treat stress as a controlled perturbation of the training environment: let $P_0$ denote the baseline path distribution; we evaluate robustness as worst-case hedging loss over alternative distributions in a relative-entropy neighborhood of $P_0$, indexed by a KL stress budget.
 
-This is more than classical "overfitting". It reflects a structural incentive of empirical risk minimization: any correlation that reduces in-sample hedging loss is rewarded, even if that correlation is an equilibrium outcome tied to a particular liquidity regime. In stress, funding constraints tighten and margins rise, producing liquidity spirals in which market liquidity deteriorates endogenously \citep{brunnermeier2009liquidity}. When intermediation constraints bind, microstructure variables such as volume, spreads, and imbalance can become markers of adverse selection and impaired execution rather than depth \citep{amihud2002illiquidity}. The key issue is therefore not only that the distribution of states shifts, but that the conditional mapping from microstructure features to execution costs can change sharply, and can even flip sign. A hedge that conditions aggressively on such features can concentrate trading in states where marginal execution costs are highest, amplifying transaction costs and tail risk.
-
-This semantic instability is not unique to funding-liquidity spirals. It is a generic feature of equilibrium observables whose interpretation depends on latent constraints and on the composition of order flow. In asymmetric-information microstructure models, the same observed volume or imbalance can reflect benign noise trading in one regime yet informed or toxic trading in another, shifting the mapping from these proxies to impact and spreads \citep{kyle1985continuous,glosten1985bid,easley2012vpin}. Similarly, inventory and balance-sheet constraints of intermediaries can change the state-dependence of liquidity provision, so identical realizations of activity can correspond to deep markets in calm periods and strained intermediation in stress \citep{brunnermeier2009liquidity,duffie2023dealercapacity}. Our controlled simulator uses liquidity spirals and toxicity as transparent microfoundations for such sign changes, but the empirical question is broader: whether hedging policies that rely on regime-contingent microstructure detail degrade faster under KL-bounded stress than payoff-anchored policies.
-
-Diagnosing this vulnerability with standard scenario stress tests is difficult. A small number of hand-picked crises may reveal isolated breakdowns, but they do not provide a comparable notion of robustness across hedges, nor do they quantify how far the market can drift from the training regime before performance degrades. We therefore treat stress as a controlled perturbation of the training environment. Let $P_0$ denote the baseline path distribution used for training. We consider alternative path distributions in a relative-entropy neighborhood of $P_0$, and index stress severity by a scalar upper bound on the KL divergence. Robustness is then defined as worst-case hedging loss over this KL ball \citep{hansen2001robust,hansen2008robust}. This ``stress operator'' converts robustness from a binary pass--fail under one scenario into a curve in stress severity.
-
-Within this evaluation framework, we introduce \emph{Occam's Hedge}: an information-budgeted deep hedging policy that limits reliance on regime-contingent microstructure detail by constraining the policy’s representation. We frame this through the lens of Rational Inattention \citep{sims2003rational}, where an agent must prioritize signals that are stable across regimes when processing capacity is limited. The policy acts on a learned stochastic representation of the observed state, and we penalize representation complexity through a KL-to-prior term, as in variational information bottleneck methods \citep{alemi2017deep}. The two Kullback--Leibler (KL) divergences play distinct roles. The outer KL defines the adversarial neighborhood of market environments used for stress evaluation. The inner KL prices how much distribution-specific detail the policy extracts from its inputs by penalizing deviation from a simple reference prior, functioning as an explicit representation bandwidth cost in the sense of variational information bottleneck methods \citep{alemi2017deep}. Occam's Hedge uses this inner information budget to reduce sensitivity to outer distributional drift.
-
-We hypothesise that as stress severity increases, robust hedging risk should grow faster for microstructure-heavy policies than for payoff-anchored policies (e.g., Greek-based state representations). Increasing the information budget penalty should reduce the representation’s information cost and flatten the growth of robust risk with stress severity. At matched baseline risk, lower information cost predicts a flatter robust-risk curve under KL stress. This defines an explicit robustness--information frontier that can be inspected in plots rather than argued in prose.
-
-We test these claims in a controlled regime-switching simulation constructed to induce an interpretable sign flip: in the training regime, volume is associated with depth and lower impact; under stress, volume is associated with toxicity and higher impact. Policies are trained only under the baseline regime and evaluated under increasing stress severity. We compare Greeks-only, microstructure-only, and combined representations under identical objectives, and we sweep the information penalty to trace the frontier. We report robust risk versus stress severity curves, $(R_0, R_\eta, \mathcal{C})$ frontiers over the information budget, and mechanism diagnostics that show how turnover and execution costs concentrate in microstructure-flagged states under stress and how this concentration changes as the information budget tightens.
-
+Within this framework, we introduce \emph{Occam's Hedge}: an information-budgeted deep hedging policy that limits reliance on regime-contingent microstructure detail by constraining the controller's representation bandwidth. Drawing on rational inattention and variational information bottleneck ideas \citep{sims2003rational,tishby2000information,alemi2017deep}, the policy acts on a stochastic representation and pays an inner KL-to-prior cost for extracting distribution-specific detail. The outer KL defines the adversarial neighborhood for stress evaluation; the inner KL prices representation complexity. We hypothesize that robust risk grows faster with stress severity for microstructure-heavy policies than for payoff-anchored (Greek-based) policies, and that tightening the information budget flattens this robust-risk curve, yielding an explicit robustness-information frontier.
 
 \subsection*{Contributions}
-\begin{enumerate}
-\item \textbf{Conceptual.} We identify a representation-level failure mode in deep hedging under regime shifts: equilibrium-based microstructure signals can change economic meaning across liquidity states, so correlations exploited in-sample can invert under stress. We show that this semantic instability arises from endogenous intermediation and funding constraints, and that it leads to concentrated over-trading precisely when execution costs are highest, consistent with a Lucas-critique mechanism \citep{Lucas1976}.
+(i) We formalize a representation-level failure mode in deep hedging with execution costs: policies trained by empirical risk minimization can exploit microstructure proxies whose marginal effect on execution costs is regime-dependent and can invert, leading to concentrated trading in high-cost states under stress. 
+(ii) We introduce a dual-KL evaluation-and-design framework: an \emph{outer} KL neighborhood over path measures produces a stress-severity indexed robustness curve for any learned policy, while an \emph{inner} KL-to-prior penalty constrains representation information and yields an explicit robustness--information tradeoff.
+(iii) In a controlled simulator with an engineered inversion in the activity--impact channel, we provide mechanism diagnostics (sign-flips in marginal cost sensitivity and changes in policy trading patterns) and compare Occam regularization against parameter regularization and input-noise baselines, reporting robustness curves with uncertainty across seeds.
 
-\item \textbf{Theoretical.} We formulate \emph{Occam’s Hedge under relative entropy uncertainty}. Stress is modeled as a KL-bounded change of measure around a baseline path distribution, which defines a robustness operator indexed by stress severity. Within this framework, we study how constraining representation information via an explicit KL-to-prior cost shifts the robustness--performance frontier under distributional drift \citep{tishby2000information,alemi2017deep}.
-
-\item \textbf{Empirical.} We design a controlled regime-switching simulation in which the volume--impact relationship reverses across regimes, and we evaluate hedging policies trained only in the baseline regime under increasing KL stress. We test whether information-cost regularization and payoff-anchored (Greek-based) representations mitigate out-of-regime degradation relative to microstructure-heavy policies \citep{brunnermeier2009liquidity,easley2012vpin}.
-\end{enumerate}
 
 \section{Literature Review}
 
-Related work spans (i) learning-based hedging under frictions, (ii) market microstructure and regime-dependent execution costs, (iii) robust control under relative-entropy model uncertainty, and (iv) information-regularized decision rules. Our contribution sits at their intersection: we evaluate hedging policies under a KL-bounded stress operator around a baseline path measure, and we study whether limiting representation information reduces sensitivity to regime-dependent microstructure semantics.
+Related work spans (i) learning-based hedging under frictions, (ii) market microstructure and regime-dependent execution costs, (iii) robust control and model risk under relative-entropy uncertainty, and (iv) information-regularized decision rules. Our contribution sits at their intersection, but with a sharper focus: we quantify hedging-policy fragility under regime shifts driven by \emph{semantic instability} of microstructure proxies, and we test whether limiting representation information mitigates this fragility. 
+Most existing deep-hedging studies evaluate out-of-sample performance under the same data-generating regime or under a small set of hand-designed stress scenarios, which makes robustness hard to compare across policies and stress intensities. Meanwhile, the relative-entropy model-risk literature provides a computable worst-case reweighting operator, but it has rarely been used to produce robustness curves for learned hedging policies or to study how representation choice interacts with stress. To our knowledge, no prior work jointly (a) evaluates deep hedges under a KL-bounded \emph{path-measure} stress operator around the training distribution and (b) links robustness to an explicit \emph{representation information cost}.
 
-\subsection{Neural Stochastic Control}
+\subsection{Learning-Based Hedging under Frictions}
 
-Deep hedging casts dynamic hedging with frictions as a stochastic control problem in which trading decisions are parameterized by flexible function classes and optimized on simulated or historical paths \citep{buehler2019deep}. The framework naturally accommodates transaction costs and impact and can target tail-sensitive objectives. A practical temptation is to enlarge the policy’s information set to include execution-related signals. This can improve baseline fit, but it also increases exposure to regime dependence when the added signals are equilibrium outcomes. Our paper focuses on this vulnerability when the policy conditions on microstructure features whose mapping to execution costs can change sharply in stress.
+Deep hedging formulates dynamic hedging with transaction costs and impact as a stochastic control problem solved with flexible function approximators \citep{buehler2019deep}. Subsequent work extends the framework to richer dynamics and objectives, including rough-volatility settings \citep{gonon2021deephedging,horvath2021deephedging} and empirical implementations on market data \citep{mikkila2023empirical}. Reinforcement-learning and dynamic-programming viewpoints further emphasize sequential decision structure, rather than one-shot regression of hedge ratios \citep{buehler2022deepbellman,murray2022continuous}. 
 
-\subsection{Market Microstructure and Toxicity}
+However, robustness in this literature is typically assessed either (i) in-sample / held-out paths generated from the same simulator or statistical model, or (ii) via a small number of stress configurations. These evaluations do not deliver a comparable \emph{stress-severity indexed} robustness curve, and they do not isolate the failure mode studied here: policies exploiting regime-contingent microstructure correlations that invert when intermediation constraints bind. Our stress-operator evaluation explicitly targets this issue by comparing policies under worst-case KL tilts of the baseline path measure.
 
-In microstructure models with asymmetric information, price impact reflects adverse selection and the informational content of order flow \citep{kyle1985continuous,glosten1985bid}. Liquidity variables such as spreads, depth, and impact are therefore equilibrium outcomes that respond endogenously to the composition of trading and to intermediation constraints. Brunnermeier and Pedersen \citep{brunnermeier2009liquidity} formalize how funding conditions and market liquidity can jointly deteriorate, generating nonlinear stress dynamics. Empirically, order-flow predictability, impact, and liquidity adjust over time as markets digest supply and demand imbalances, with implications for the time- and volume-dependence of impact \citep{bouchaud2008digest}. Toxicity measures such as VPIN aim to proxy adverse selection conditions \citep{easley2012vpin}, and illiquidity measures link worsening trading conditions to higher execution costs \citep{amihud2002illiquidity}. This literature motivates our core mechanism: microstructure proxies can be informative in a baseline regime yet become semantically unstable when constraints bind, leading microstructure-heavy hedges to trade most aggressively precisely when execution is most expensive. More broadly, execution costs have long been treated as endogenous components of optimal trading and hedging problems in the optimal execution literature, where state-dependent impact and turnover penalties fundamentally shape optimal controls rather than appearing as ex post adjustments \cite{almgren2001optimal}.
+\subsection{Market Microstructure, Constraints, and Stress Episodes}
 
-\subsection{Relative Entropy Uncertainty and Robust Control}
+In asymmetric-information microstructure models, impact and spreads arise endogenously from adverse selection and liquidity provision \citep{kyle1985continuous,glosten1985bid}. Funding constraints can interact with market liquidity to generate nonlinear deterioration in execution conditions \citep{brunnermeier2009liquidity}. Empirical work documents persistent and state-dependent impact and liquidity dynamics \citep{bouchaud2008digest,gatheral2012impact}, and toxicity proxies such as VPIN are designed to capture adverse-selection conditions that vary over time \citep{easley2012vpin}. These mechanisms motivate our key distinction: microstructure variables are equilibrium outcomes, so their mapping to execution costs can be regime-dependent and can change sign.
 
-Robust control evaluates decisions under model uncertainty by considering alternative probability models in a neighborhood of a reference model, often defined by relative entropy constraints \citep{hansen2001robust,hansen2008robust}. This yields an operator view of stress: a single severity parameter controls the size of the KL neighborhood, and robustness is assessed by worst-case expected loss within that set. The Donsker--Varadhan variational representation connects KL-constrained worst-case evaluation to exponential tilting \citep{donskervaradhan1975}, making robust evaluation computable from baseline samples via exponential reweighting. We adopt this approach at the level of \emph{path measures} around the training distribution, which turns ``stress testing'' into a comparable robustness curve indexed by KL severity. From a financial perspective, this KL-bounded worst-case expectation can be interpreted as a parametrized convex risk envelope, linking relative-entropy robustness to the theory of convex and coherent risk measures \cite{artzner1999coherent,foellmer2002convex}.
+This regime dependence is not only theoretical. The March 2020 episode provides a canonical illustration of constraint-driven liquidity deterioration in high-quality markets: dealer balance-sheet usage and intermediation capacity constraints were associated with sharp losses in Treasury market functionality \citep{he2022treasury,duffie2023dealer}. Related evidence from credit markets shows abrupt increases in trading costs and dislocations consistent with binding intermediation frictions \citep{haddad2021viral,kargar2021bondliquidity}. These episodes support the practical relevance of our mechanism: observable activity (including volume and order flow) can surge while execution costs worsen, making “high activity $\Rightarrow$ cheap trading” an unreliable rule across regimes.
 
-\subsection{Non-stationarity and Robustness}
+\subsection{Relative-Entropy Uncertainty, Robust Control, and Model Risk}
 
-A broad set of ideas in statistics and machine learning emphasizes that generalization under distribution shift is tied to stability of relationships across environments, rather than in-sample fit alone \citep{arjovsky2019invariant,peters2016causal}. Our setting is domain specific: we do not construct multiple labeled environments or attempt to learn invariant predictors directly. Instead, we treat stress as KL-bounded drift around the baseline path distribution and evaluate hedging policies under this operator, with a focus on regime dependence of microstructure semantics. While ideas from invariant prediction and distributional robustness motivate parts of our evaluation philosophy, our approach remains grounded in financial notions of robustness, where stability is assessed through loss behavior under adversarial reweighting of market paths rather than through explicit environment labels \cite{foellmer2002convex}.
+Robust control evaluates decisions under model uncertainty by considering alternative probability models in a neighborhood of a reference model, with relative entropy (KL) providing a canonical notion of distance \citep{hansen2001robust,hansen2008robust}. The Donsker--Varadhan representation yields a tractable dual form and interprets worst-case evaluation as exponential tilting of the baseline model \citep{donskervaradhan1975}. In quantitative risk management, relative-entropy neighborhoods have been used to quantify model risk and derive computable worst-case bounds with minimal overhead beyond baseline Monte Carlo \citep{glasserman2014modelrisk}. 
 
-\subsection{Information Costs in Sequential Decisions}
+We adopt this perspective at the level of \emph{path measures} around the training distribution used to learn a hedging policy. This produces a robustness curve indexed by a single stress budget, enabling apples-to-apples comparisons across hedges. The novelty in our setting is not KL robustness alone, but its combination with representation parsimony: we study how a controller’s information usage affects susceptibility to KL-bounded adversarial reweighting.
 
-The information bottleneck formalizes a tradeoff between relevance and compression \citep{tishby2000information}, and variational implementations make KL-to-prior penalties operational in neural systems \citep{alemi2017deep}. In sequential decision problems, such penalties can be interpreted as priced information flow through an endogenous observation channel: the controller acts on a filtered representation and pays for extracting distribution-specific detail. We use the KL-to-prior term as a scale-stable proxy for representation bandwidth. This \emph{inner} KL is conceptually distinct from the \emph{outer} KL defining the stress neighborhood: the outer KL sets the uncertainty set for evaluation, while the inner KL prices how much detail the policy encodes from inputs. Our central empirical question is whether controlling this representation cost reduces the growth of robust hedging risk as KL stress increases.
+\subsection{Distribution Shift and Robustness in ML}
+
+A broad ML literature emphasizes that out-of-distribution generalization depends on stability of relationships across environments rather than in-sample fit alone \citep{arjovsky2019invariant,sagawa2019distributionally}. Our setting differs in that stress affects both state visitation and action costs (execution), so we evaluate robustness through adversarial reweighting of baseline \emph{paths} rather than supervised prediction under labeled environments.
 
 
-\section{Model}
-\label{sec:model}
+\subsection{Information Costs and Representation Parsimony}
 
-We consider discrete-time hedging at times $t=0,1,\dots,T$. Let $S_t$ denote the underlying price process. The hedger trades $d$ hedging instruments with (discounted) price vector $H_t\in\mathbb{R}^d$; the single-instrument case $d=1$ with $H_t=S_t$ is a special case used in our experiments unless stated otherwise. The terminal liability is a random variable $L$ (e.g., a European payoff), measurable with respect to the terminal market state.
+Rational inattention formalizes decision-making under limited information-processing capacity \citep{sims2003rational}. The information bottleneck and its variational implementations provide an operational route to penalize representation complexity via KL-to-prior terms \citep{tishby2000information,alemi2017deep}. In sequential control, relative-entropy penalties can be interpreted as priced deviations from a reference dynamics or policy, supporting tractable control-as-inference formulations \citep{todorov2009linearly,rawlik2013stochastic}. 
 
-We model market conditions (normal vs.\ stress) by a regime index $r\in\mathcal{R}$, where each regime induces a probability measure $P_r$ over market trajectories and observable features. Specifically, we assume that under regime $r$,
+We use an \emph{inner} KL-to-prior penalty as an explicit information budget on the learned representation. This inner information cost is conceptually distinct from the \emph{outer} KL defining the stress neighborhood: the outer KL governs model uncertainty over market paths, while the inner KL prices how much distribution-specific detail the policy encodes. Our empirical question is whether tightening the inner information budget mitigates vulnerability to regime-dependent microstructure semantics, thereby flattening the robustness curve under KL stress.
+
+
+\section{Model and Theoretical Framework}
+\label{sec:framework}
+
+This section presents the hedging setup, regime-dependent execution costs, and the information-constrained architecture.
+We then define semantic inversion and introduce a KL-bounded stress operator that produces a stress-severity indexed robustness curve. Finally, we provide a stylized mechanism linking the inner KL information cost to robustness under semantic inversion.
+
+\subsection{Problem Setup}
+\label{subsec:model_setup}
+
+We consider discrete-time hedging at times $t=0,1,\dots,T$. Let $S_t$ denote the underlying price process. The hedger trades $d$ hedging instruments with (discounted) price vector $H_t\in\mathbb{R}^d$; the single-instrument case $d=1$ with $H_t=S_t$ is used in our experiments unless stated otherwise. The terminal liability is a random variable $L$ (e.g., a European payoff), measurable with respect to terminal market information.
+
+Market conditions are indexed by a regime label $r\in\mathcal{R}$. For each $r$, let $P_r$ denote a probability measure over market trajectories and observed features:
 \[
 \big(H_{0:T},\,X_{0:T},\,L\big)\sim P_r,
 \]
-where $X_t$ denotes the time-$t$ observable feature vector available to the hedger (e.g., contract state and Greeks, microstructure proxies, or their concatenation).
+where $X_t$ is the time-$t$ observable feature vector available to the hedger (e.g., contract state and Greeks, microstructure proxies, or their concatenation). In our empirical protocol, the regime is \emph{episode-wise} (each path is drawn from $P_0$ or $P_1$); we defer within-path regime switching to the simulator specification in Section~\ref{sec:methodology}.
 
-At each time $t$, the hedger chooses a position $a_t\in\mathbb{R}^d$ after trading at time $t$. We allow the policy to act on a representation of the observable state. Let $Z_t$ denote a representation constructed from observations (typically $X_t$ or $X_{0:t}$). A (possibly stochastic) representation mechanism produces $Z_t$ from $X_t$, and a policy maps $Z_t$ to positions:
+At each time $t$, the hedger chooses a post-trade position $a_t\in\mathbb{R}^d$. We allow the trading rule to act on a (possibly stochastic) representation $Z_t$ of the observation. A representation mechanism (encoder) produces $Z_t$ from the observation, and a policy maps $Z_t$ to positions:
 \[
 Z_t \sim p_\phi(\cdot \mid X_t), 
 \qquad 
 a_t = \pi_\theta(Z_t),
 \]
-where $\phi$ parameterizes the representation (encoder) and $\theta$ parameterizes the trading rule. We define trades by $\Delta a_t := a_t-a_{t-1}$ with $a_{-1}:=0$.
+where $\phi$ parameterizes the encoder and $\theta$ parameterizes the trading rule. Trades are $\Delta a_t := a_t-a_{t-1}$ with $a_{-1}:=0$.
+In our implementation, $p_\phi(\cdot\mid X_t)$ is a Gaussian encoder (Section~\ref{subsec:info_constrained_policy}); no distributional assumption is imposed on the observed state $X_t$.
 
-Trading incurs regime-dependent frictions. Let $C_{r,t}(\Delta a_t)$ denote the trading cost at time $t$ in regime $r$ (capturing spreads, market impact, constraints, or other execution effects). The terminal hedging error is
+\subsection{Execution Costs and Semantic Inversion}
+\label{subsec:cost_model}
+
+Trading incurs regime- and state-dependent execution costs. Let
+\[
+C_{r,t}(\Delta a_t; X_t)
+\]
+denote the cost of trading $\Delta a_t$ at time $t$ in regime $r$, conditional on the observed microstructure state $X_t$ (capturing spreads, market impact, constraints, or other execution effects). This state dependence is essential: the core mechanism studied in this paper is that the mapping from microstructure proxies (e.g., volume) to marginal execution costs can change across regimes.
+
+\begin{definition}[Semantic inversion]
+\label{def:semantic_inversion}
+Fix a feature coordinate $j$ of the observable state $x\in\mathcal{X}$. Consider a scalar execution-cost coefficient
+$m_{r,t}(x)$ (e.g., an element of the spread term $s_{r,t}(x)$ or an element of the impact matrix $\Lambda_{r,t}(x)$
+in \eqref{eq:cost_generic}; in the single-instrument quadratic case this can be the impact coefficient $\lambda_{r,t}(x)$).
+We say that feature $x_j$ exhibits \emph{semantic inversion} between regimes $r=0$ and $r=1$ if there exist
+$t$ and $x$ such that
+\[
+\frac{\partial m_{0,t}(x)}{\partial x_j}\cdot \frac{\partial m_{1,t}(x)}{\partial x_j} < 0.
+\]
+Equivalently, increasing $x_j$ moves marginal execution costs in opposite directions across regimes.
+\end{definition}
+
+In our experiments we take $m_{r,t}(x)=\lambda_{r,t}(x)$, so semantic inversion is diagnosed by a sign flip in
+$\partial \lambda_{r,t}/\partial \mathrm{Vol}_t$ across regimes.
+
+Definition~\ref{def:semantic_inversion} formalizes the regime-dependent meaning of microstructure proxies by focusing on the sign of their effect on \emph{marginal} execution costs. This captures the mechanism emphasized in asymmetric-information microstructure models, where impact depends on adverse selection and the informational content of order flow \citep{kyle1985continuous,glosten1985bid}. It also aligns with liquidity-spiral dynamics: when funding constraints tighten, intermediation capacity falls and impact rises endogenously \citep{brunnermeier2009liquidity}, so proxies that correlate with execution quality in normal times can weaken or invert in stress.
+
+A convenient generic specification (used in our experiments) is a spread-plus-impact form,
+\begin{equation}
+\label{eq:cost_generic}
+C_{r,t}(\Delta a_t;X_t)
+=
+s_{r,t}(X_t)\,\|\Delta a_t\|_1
++\frac{1}{2}\,\Delta a_t^\top \Lambda_{r,t}(X_t)\,\Delta a_t,
+\end{equation}
+where $s_{r,t}(X_t)\ge 0$ is an effective spread term and $\Lambda_{r,t}(X_t)\succeq 0$ is an impact matrix. Semantic inversion is represented by regime-dependent responses of $(s_{r,t},\Lambda_{r,t})$ to the same observed proxy: for example, the impact sensitivity to a volume feature can be decreasing in volume under $r=0$ (volume as depth) but increasing under $r=1$ (volume as toxic liquidation), as specified in Section~\ref{sec:methodology}.
+
+\subsection{Hedging Error and Risk}
+\label{subsec:hedge_error_risk}
+
+Given $(\pi_\theta,p_\phi)$, the terminal hedging error under regime $r$ is
 \begin{equation}
 \label{eq:hedge_error}
-Y^{\theta,\phi}_r 
-:= 
-L 
--\sum_{t=0}^{T-1} a_t^\top\big(H_{t+1}-H_t\big)
--\sum_{t=0}^{T-1} C_{r,t}(\Delta a_t).
+Y^{\theta,\phi}_r
+:=
+L
+-\sum_{t=0}^{T-1} a_t^\top(H_{t+1}-H_t)
+-\sum_{t=0}^{T-1} C_{r,t}(\Delta a_t;X_t).
 \end{equation}
-Thus $Y^{\theta,\phi}_r$ measures liability minus cumulative trading gains minus execution costs under regime $r$.
-
-Let $\rho(\cdot)$ be a tail-risk functional (e.g., Expected Shortfall $\mathrm{ES}_\gamma$ at level $\gamma$) applied to the hedging error. We define the regime-$r$ risk of a policy as
+We treat $Y^{\theta,\phi}_r$ as a loss variable (larger is worse), so tail-risk functionals such as ES are applied to $Y$. Thus $Y^{\theta,\phi}_r$ equals liability minus cumulative trading gains minus execution costs. Let $\rho(\cdot)$ be a tail-risk functional (e.g., Expected Shortfall $\mathrm{ES}_\gamma$). The regime-$r$ risk of a policy is
 \begin{equation}
 \label{eq:regime_risk}
 R_r(\theta,\phi) := \rho\!\left(Y^{\theta,\phi}_r\right),
 \end{equation}
 where the distribution of $Y^{\theta,\phi}_r$ is induced by $P_r$ and the policy dynamics.
-Our empirical protocol is regime-asymmetric: we train on a baseline regime $r=0$ and evaluate robustness by comparing performance under a stress regime $r=1$ and, later, under a KL-bounded stress operator around $P_0$. We summarize out-of-regime degradation using quantities such as
+We summarize out-of-regime degradation by quantities such as
 \[
 \Delta R := R_1 - R_0,
-\qquad
-\text{or}
 \qquad
 \mathrm{Deg} := \frac{R_1}{R_0},
 \]
 together with trading diagnostics (turnover and incurred costs).
 
-\section{Theory}
-\label{sec:theory}
+\subsection{Information-Constrained Policy}
+\label{subsec:info_constrained_policy}
 
-This section explains why hedging policies that rely heavily on microstructure detail can degrade sharply under regime shifts, and it introduces two operational quantities that organize robustness: (i) a KL-bounded \emph{stress operator} around the baseline path measure, and (ii) an \emph{information cost} that measures how much distribution-specific detail a policy extracts from its inputs.
+Occam's Hedge constrains how much distribution-specific detail the controller extracts from observations by penalizing representation information. We adopt a stochastic encoder with a reference prior $p(z)$ (e.g., $\mathcal{N}(0,I)$). In our implementation,
+\[
+p_\phi(z_t\mid X_t) = \mathcal{N}\!\big(\mu_\phi(X_t),\mathrm{diag}(\sigma_\phi^2(X_t))\big),
+\qquad
+p(z)=\mathcal{N}(0,I).
+\]
+Define the per-step information cost as a KL-to-prior,
+\[
+\mathrm{IC}_t(\phi)
+:=
+\mathrm{KL}\!\left(p_\phi(Z_t\mid X_t)\,\|\,p(Z_t)\right),
+\]
+and the (time-averaged) representation information cost under the baseline measure $P_0$ as
+\begin{equation}
+\label{eq:info_cost}
+\mathcal{C}(\phi)
+:=
+\mathbb{E}_{P_0}\!\left[\frac{1}{T}\sum_{t=0}^{T-1}\mathrm{IC}_t(\phi)\right].
+\end{equation}
+This inner KL term operationalizes a representation bandwidth constraint: larger $\mathcal{C}(\phi)$ indicates that the encoder departs more from a regime-agnostic codebook in order to encode fine-grained, potentially regime-contingent detail.
 
-\subsection{Structural and Equilibrium Information}
-\label{subsec:microfoundations}
-
-Differences in regime robustness between Greek-based and microstructure-based policies can be traced to a distinction between \emph{structural} and \emph{equilibrium} information.
-
-Structural variables are anchored to the derivative contract and to no-arbitrage pricing logic. They reflect constraints that persist across regimes, although their numerical values may change with volatility and time. Equilibrium variables, by contrast, are outcomes of strategic interaction among heterogeneous agents whose incentives, information sets, and funding constraints can change across regimes. Their economic meaning is therefore non-stationary.
-
-Microstructure features such as volume and order imbalance summarize order flow. In asymmetric-information models, price impact and liquidity provision depend on adverse selection, i.e.\ the fraction of informed versus noise trading \citep{kyle1985continuous,glosten1985bid}. Let $\alpha_r\in[0,1]$ denote a regime-dependent share of informed trading. A key implication is \emph{semantic instability}: the mapping from a feature value to its economic interpretation is not invariant across regimes. The same volume level may signal depth when $\alpha_r$ is low, yet signal toxicity when $\alpha_r$ is high. A policy trained on baseline data can exploit the former mapping while failing to recognize that it can weaken or invert when the equilibrium composition of traders changes.
-
-Brunnermeier and Pedersen \citep{brunnermeier2009liquidity} emphasize that market liquidity and funding liquidity can jointly deteriorate under stress. A funding shock raises margins and tightens balance-sheet constraints, reducing liquidity provision and amplifying price impact. This breaks the mapping from microstructure proxies to execution quality: the same observed volume can correspond to deep liquidity in normal times and forced liquidation in margin spirals. By contrast, payoff-anchored quantities such as contract state and Greeks are not defined by liquidity provision equilibria; the contract payoff and its sensitivity structure do not change when margins rise, even though realized hedging outcomes do.
-
-Operationally, we treat Greeks and contract state as \emph{structural} inputs and microstructure proxies as \emph{equilibrium} inputs. The experiments test whether the latter degrade faster under stress and whether limiting reliance on equilibrium detail improves out-of-regime performance.
-
-\subsection{A KL Stress Operator on Path Measures}
+\subsection{KL Stress Operator and Robust Evaluation}
 \label{subsec:kl_stress_operator}
 
-Fix the baseline (training) path measure $P_0$. Let $Y^{\theta,\phi}$ denote the terminal hedging error induced by the policy $(\pi_\theta,p_\phi)$ under the baseline market dynamics and trading-cost model. We measure performance with the same tail-sensitive objective used in training and reporting. Concretely, we take $\rho(\cdot)$ to be a tail-risk functional such as Expected Shortfall $\mathrm{ES}_\gamma$ at confidence level $\gamma\in(0,1)$. A convenient convex representation of Expected Shortfall is
+Having defined baseline risk, we now introduce a stress operator for robustness evaluation. Fix the baseline (training) path measure $P_0$. Let $Y^{\theta,\phi}$ denote the terminal hedging error induced by the policy $(\pi_\theta,p_\phi)$ under baseline dynamics, viewed as a random variable on the baseline path space. Performance is measured with a tail-risk functional; we focus on Expected Shortfall $\mathrm{ES}_\gamma$ at confidence level $\gamma\in(0,1)$.
+
+A standard convex representation of ES is
 \begin{equation}
 \label{eq:es_dual_q}
 \mathrm{ES}_\gamma(Y)
@@ -169,9 +224,9 @@ which motivates the sample-wise convex loss
 \ell_q(y)
 := q+\frac{1}{1-\gamma}(y-q)_+.
 \end{equation}
-In practice, $q$ can be optimized jointly with policy parameters during training or taken as the empirical minimizer for evaluation.
 
-We model stress as an adversarial change of measure around $P_0$ constrained by relative entropy. For a stress budget $\eta\ge 0$, define the KL neighborhood
+\paragraph{Relative-entropy uncertainty set.}
+For a stress budget $\eta\ge 0$, define the KL neighborhood
 \begin{equation}
 \label{eq:kl_ball}
 \mathcal{U}_\eta(P_0)
@@ -185,9 +240,10 @@ Q\ll P_0:\;
 =
 \mathbb{E}_Q\!\left[\log\frac{dQ}{dP_0}\right].
 \end{equation}
-We refer to this divergence as the \emph{outer} KL, denoted $\mathrm{KL}_{\mathrm{outer}}(Q;P_0)$ when we want to emphasize its role as a measure of distributional drift over path measures.
+We call this divergence the \emph{outer} KL when emphasizing distributional drift over path measures.
 
-The KL-stressed (robust) risk of a policy is defined as the worst-case value of the tail objective over this neighborhood. To preserve the semantics of Expected Shortfall under stress, we embed the ES representation \eqref{eq:es_dual_q} inside the adversarial evaluation and define
+\paragraph{KL-stressed Expected Shortfall.}
+To preserve ES semantics under stress, we place the ES dual inside the adversarial evaluation and define
 \begin{equation}
 \label{eq:kl_stressed_es}
 R_\eta(\theta,\phi)
@@ -196,9 +252,10 @@ R_\eta(\theta,\phi)
 \sup_{Q\in\mathcal{U}_\eta(P_0)}
 \mathbb{E}_Q\!\left[\ell_q\!\left(Y^{\theta,\phi}\right)\right].
 \end{equation}
-This definition ensures that the threshold parameter $q$ is allowed to adapt to the stressed measure, rather than being implicitly fixed under the baseline distribution. The scalar $\eta$ indexes stress severity and turns robustness into a curve $\eta\mapsto R_\eta(\theta,\phi)$ rather than a binary pass--fail under a single hand-picked scenario.
+Here $Y^{\theta,\phi}$ denotes the baseline hedging error random variable evaluated under an alternative measure $Q$ on the same path space (i.e., a reweighting of baseline paths). The scalar $\eta$ indexes stress severity and produces a robustness curve $\eta\mapsto R_\eta(\theta,\phi)$.
 
-A standard variational representation (Donsker--Varadhan) yields an operational form for the inner supremum: for any fixed $q$ and under mild integrability conditions,
+\paragraph{Variational (Donsker--Varadhan) form.}
+A direct application of the Donsker--Varadhan variational principle \citep{donskervaradhan1975} yields: for fixed $q$ and under mild integrability conditions,
 \begin{equation}
 \label{eq:dv_for_es_loss}
 \sup_{Q\in\mathcal{U}_\eta(P_0)}
@@ -211,108 +268,100 @@ A standard variational representation (Donsker--Varadhan) yields an operational 
 +\eta
 \right).
 \end{equation}
-Combining \eqref{eq:kl_stressed_es} and \eqref{eq:dv_for_es_loss} makes evaluation feasible from baseline samples via a log-sum-exp estimator and one-dimensional optimization over $\lambda$, together with the outer minimization over $q$.
+Thus $R_\eta$ can be estimated from baseline samples via a log-sum-exp estimator and one-dimensional optimization over the Lagrange multiplier $\lambda$, together with the outer minimization over $q$.
 
-\begin{proposition}[Properties of the KL stress operator]
-\label{prop:kl_stress_properties}
-Fix $P_0$ and a measurable loss $\ell_q(Y^{\theta,\phi})$ such that
-$\mathbb{E}_{P_0}[\exp(\lambda \ell_q(Y^{\theta,\phi}))]<\infty$ for some $\lambda>0$.
-Define
+\paragraph{Why KL (relative entropy).}
+We use relative entropy because it yields (i) a tractable dual representation for worst-case expectations (Donsker--Varadhan), (ii) a natural exponential tilting interpretation on \emph{path space}, and (iii) a clean composition with the inner KL information cost used to budget representation sensitivity. While Wasserstein-based uncertainty sets offer alternative notions of distributional robustness with geometric transport interpretations, we use relative entropy because it (i) yields a tractable Donsker--Varadhan dual form, (ii) naturally composes with our information-theoretic representation cost, and (iii) admits a clean exponential tilting interpretation on path space. 
+
+\paragraph{Limitation.}
+The uncertainty set $\mathcal{U}_\eta(P_0)$ only contains measures $Q$ that are absolutely continuous with respect to $P_0$.
+Therefore, KL stress can \emph{reweight} baseline trajectories but cannot assign mass to states outside the support of $P_0$.
+We interpret $\eta$ as a controlled local stress around the training distribution, complementary to discrete regime simulation
+(which may introduce genuinely new states).
+
+
+\paragraph{Estimation and numerical stability.}
+In experiments, we estimate \eqref{eq:dv_for_es_loss} from baseline Monte Carlo samples $\{\omega_i\}_{i=1}^n\sim P_0$ using a stabilized log-sum-exp estimator:
 \[
-\mathcal{R}_\eta(q;\theta,\phi)
-:=\sup_{Q\in\mathcal{U}_\eta(P_0)}\mathbb{E}_Q\!\left[\ell_q\!\left(Y^{\theta,\phi}\right)\right].
+\log \widehat{\mathbb{E}}_{P_0}\!\left[\exp(\lambda \ell_q)\right]
+=
+m + \log\left(\frac{1}{n}\sum_{i=1}^n \exp\big(\lambda \ell_q(Y^{\theta,\phi}(\omega_i))-m\big)
+\right),
+\qquad
+m := \max_i \lambda \ell_q(\omega_i).
 \]
-Then $\eta\mapsto \mathcal{R}_\eta(q;\theta,\phi)$ is nondecreasing and convex. Moreover,
-for any fixed $\lambda>0$, the maximizer of
-$\mathbb{E}_Q[\ell_q(Y^{\theta,\phi})]$ subject to $\mathrm{KL}(Q\|P_0)\le \eta$
-is attained by an exponential tilt of $P_0$ of the form
+We optimize over $\lambda>0$ via one-dimensional convex search on a bounded interval, and we report robustness curves with uncertainty across random seeds to reflect estimator variance in the exponential tilting regime.
+
+\begin{proposition}[Exponential tilting under KL stress]
+\label{prop:kl_tilt}
+Assume $\mathbb{E}_{P_0}[\exp(\lambda\,\ell_q(Y^{\theta,\phi}))]<\infty$ for some $\lambda>0$. For fixed $(q,\lambda)$, the maximizer in \eqref{eq:dv_for_es_loss} is attained by an exponential tilt of $P_0$:
 \[
 \frac{dQ^\star_{\lambda,q}}{dP_0}(\omega)
 =
 \frac{\exp\!\left(\lambda\,\ell_q\!\left(Y^{\theta,\phi}(\omega)\right)\right)}
 {\mathbb{E}_{P_0}\!\left[\exp\!\left(\lambda\,\ell_q\!\left(Y^{\theta,\phi}\right)\right)\right]}.
 \]
-Consequently, the KL stress operator can be evaluated via the one-dimensional dual problem
-\[
-\mathcal{R}_\eta(q;\theta,\phi)
-=
-\inf_{\lambda>0}\frac{1}{\lambda}
-\left(
-\log \mathbb{E}_{P_0}\!\left[\exp\!\left(\lambda\,\ell_q\!\left(Y^{\theta,\phi}\right)\right)\right]
-+\eta
-\right),
-\]
-which is the Donsker--Varadhan representation.
 \end{proposition}
 
-By definition, the stressed Expected Shortfall risk in \eqref{eq:kl_stressed_es} can be written compactly as
+\paragraph{Proof sketch.}
+Fix $q$ and introduce a Lagrangian for the constrained maximization of $\mathbb{E}_Q[\ell_q(Y^{\theta,\phi})]$ subject to $\mathrm{KL}(Q\|P_0)\le \eta$ and $\mathbb{E}_{P_0}\!\left[\frac{dQ}{dP_0}\right]=1$. Optimizing pointwise over the Radon--Nikodym derivative yields $\frac{dQ^\star}{dP_0}\propto \exp(\lambda\,\ell_q)$, and substituting back gives \eqref{eq:dv_for_es_loss}. A complete proof is standard; see \citet{donskervaradhan1975} and is reproduced in Appendix~\ref{app:dv_proof}.
+
+\paragraph{Remark (Discrete regimes as specific tilts).}
+If a stress regime $P_1$ satisfies $P_1\ll P_0$, then $P_1(d\omega)=w_1(\omega)\,P_0(d\omega)$ with $w_1=\frac{dP_1}{dP_0}$ and $\mathbb{E}_{P_0}[w_1]=1$. In this case, expected losses under $P_1$ can be written as weighted baseline losses:
 \[
-R_\eta(\theta,\phi)=\min_{q\in\mathbb{R}}\mathcal{R}_\eta(q;\theta,\phi).
+\mathbb{E}_{P_1}[\ell(Y)] = \mathbb{E}_{P_0}[w_1\,\ell(Y)].
 \]
+In our experiments we also report $\eta_1 := \mathrm{KL}(P_1\|P_0)$ (estimated from simulator densities) to relate the discrete stress scenario to the continuous robustness curve $\eta\mapsto R_\eta$.
 
-
-
-\subsection{Regime Shifts as Density Tilting}
-\label{subsec:regime_shifts}
-
-Specific regime shifts can be expressed as changes in the path distribution $P_r$ relative to $P_0$. Under $P_r \ll P_0$, there exists a Radon--Nikodym derivative $w_r(\omega)=\frac{dP_r}{dP_0}(\omega)$ such that
-\begin{equation}
-\label{eq:tilt}
-P_r(d\omega)=w_r(\omega)\,P_0(d\omega), 
-\qquad 
-\mathbb{E}_{P_0}[w_r]=1,
-\end{equation}
-where $\omega$ denotes a realized path. Stress regimes can therefore be viewed as reweighting baseline probability mass toward tail paths with extreme volatility, dry liquidity, or concentrated informed flow.
-
-For any loss $\ell$, regime-$r$ expected loss can be written as
-\begin{equation}
-\label{eq:weighted_risk}
-\mathbb{E}_{P_r}[\ell(Y)]
-=\mathbb{E}_{P_0}\!\left[w_r(\omega)\,\ell\!\left(Y(\omega)\right)\right].
-\end{equation}
-This identity clarifies why regime shifts expose representation fragility: a representation that is predictive on typical baseline paths may be unreliable on reweighted tail paths that dominate stress risk. In our simulator, the ``stress regime'' $P_1$ provides one interpretable tilt; the KL stress operator \eqref{eq:kl_robust_risk} evaluates the worst-case tilt among \emph{all} alternative measures within a KL budget $\eta$.
-\begin{equation}
-\label{eq:kl_robust_risk}
-R_\eta(\theta,\phi)
-:=
-\sup_{Q\in \mathcal{U}_\eta(P_0)}
-\mathbb{E}_Q\big[\ell(Y^{\theta,\phi})\big],
-\end{equation}
-where $\ell$ denotes the sample-wise convex loss used in evaluation (for Expected Shortfall, $\ell=\ell_q$ and the overall risk is obtained by minimizing over $q$ as in \eqref{eq:kl_stressed_es}).
-
-\paragraph{Interpretation.}
-The exponential tilting implied by the KL stress operator reweights baseline market paths toward outcomes with larger hedging losses in a controlled manner, with the stress budget $\eta$ governing how far the tilted measure can deviate from the training distribution $P_0$. The dual representation \eqref{eq:dv_for_es_loss} is closely related to entropic risk evaluation: the log moment-generating function $\log \mathbb{E}_{P_0}[\exp(\lambda \ell)]$ acts as an exponential-utility penalty on tail losses, while the KL constraint introduces an explicit radius of model uncertainty. From a financial perspective, this yields a convex risk envelope indexed by $\eta$, producing a comparable robustness curve $\eta\mapsto R_\eta$ rather than a binary pass--fail assessment under a small set of hand-picked stress scenarios.
-
-
-\subsection{Representation Risk and an Operational Information Cost}
-\label{subsec:repr_risk}
-Let $Z_t$ denote the representation used by the policy. We separate the policy $\pi_\theta$ from the representation mechanism because representation choice is the core object of interest. A natural notion of relevance is the predictive content of the representation about the liability, e.g.\ $I(Z;L\mid r)$, but mutual information is difficult to estimate robustly in continuous, high-dimensional sequential settings and is not the quantity optimized in our implementation.
-
-Instead, we penalize an operational proxy for distribution-specific detail: the average KL divergence from a reference prior. Let $Z_t$ be produced by a stochastic encoder $p_\phi(z_t\mid x_t)$ and let $p(z)$ be a reference prior (e.g.\ $\mathcal{N}(0,I)$). Define the \emph{inner} KL information cost
-\[
-C(Z):=\mathbb{E}_{P_0}\Big[\underbrace{\mathrm{KL}\big(p_\phi(z\mid x)\,\|\,p(z)\big)}_{=:~\mathrm{KL}_{\mathrm{inner}}(z;x)}\Big],
-\]
-where the expectation is taken over baseline observations (and averaged over time along baseline paths). The inner KL $\mathrm{KL}_{\mathrm{inner}}$ prices \emph{information extraction}: it measures how far the encoder must deviate from a regime-agnostic codebook in order to represent the state well enough to act. Representations that rely on fine-grained equilibrium detail tend to require larger deviations and therefore higher information cost.
-
-The Occam's Hedge at the representation level hypothesize that among policies capable of achieving comparable baseline performance, those with lower $C(Z)$ exhibit lower degradation under stress because they rely less on equilibrium mappings that can invert.
-
-\paragraph{Dual-KL mechanism.}
-The two divergences play distinct but complementary roles. $\mathrm{KL}_{\mathrm{outer}}$ defines an adversarial set of alternative market path distributions used for stress evaluation, while $\mathrm{KL}_{\mathrm{inner}}$ constrains the agent's observation bandwidth by penalizing how much regime-specific detail the policy encodes into $Z$.
-
-This connects to the variational information bottleneck (VIB) viewpoint: in common variational parameterizations, the KL-to-prior penalty upper-bounds the mutual information between inputs and representation (up to modeling assumptions), i.e.\ it limits how strongly $Z$ can track high-entropy, environment-contingent features. In our setting, those high-entropy features are precisely microstructure variables whose mapping to execution costs is equilibrium-dependent and hence non-invariant under distribution shift. Tightening $\mathrm{KL}_{\mathrm{inner}}$ therefore acts as a stabilizer for $\mathrm{KL}_{\mathrm{outer}}$ in the following operational sense: the outer adversary increases risk by reweighting baseline paths toward regions where the learned mapping fails, and reducing representation bandwidth makes fewer such brittle mappings available to exploit. Empirically, this should appear as a flatter robust-risk curve $\eta\mapsto R_\eta$ at matched baseline risk.
-
-\paragraph{Why not simply detect regimes?}
-A natural alternative is to augment the hedging policy with an explicit regime detector (e.g., a hidden Markov model or Markov-switching state-space model) and to condition actions on the inferred regime. We view this as a valuable baseline, but it does not resolve the core failure mode studied here. Regime-switching approaches require that regimes are identifiable early enough to prevent large losses and that the mapping from observables to regimes is stable across episodes. In microstructure-driven stress, however, common indicators (volume, spreads, order-flow proxies) are equilibrium objects whose economic meaning can invert when funding constraints bind and adverse selection rises; this directly violates stationarity of the detector's emission model. Moreover, hedging loss is typically nonlinear in execution conditions, so modest misclassification or delayed switching can induce large performance deterioration precisely during transition periods. Our approach is complementary: rather than relying on correct real-time regime identification, we constrain the policy's effective observation bandwidth so that it cannot strongly depend on regime-contingent correlations, yielding smoother degradation under distributional drift.
-
-
-\subsection{A Robustness--Information Frontier}
+\subsection{Dual-KL Mechanism and Robustness--Information Frontier}
 \label{subsec:frontier}
 
-The objective \eqref{eq:hedge_objective} implies a practical evaluation principle. Sweeping $\beta$ traces a tradeoff frontier between baseline performance and information cost, and the same trained policies can be evaluated under KL stress. Empirically, we report triplets of the form
+We now connect the stress operator to representation parsimony by measuring how much distribution-specific detail the policy encodes and relating this information cost to robustness under KL-bounded reweighting. We separate the policy $\pi_\theta$ from the representation mechanism because representation choice is the core object of interest. While mutual information quantities such as $I(X;Z)$ or $I(Z;L)$ are conceptually relevant, they are not directly optimized in our implementation. Instead we use a tractable proxy standard in variational information bottleneck methods: a KL-to-prior penalty.
+
+Let $Z_t$ be produced by a stochastic encoder $p_\phi(z_t\mid X_t)$ with reference prior $p(z)$ (e.g., $\mathcal{N}(0,I)$). We use the same notation as in Section~\ref{subsec:model_setup} and define the time-averaged information cost under the baseline measure:
+\begin{equation}
+\label{eq:info_cost_theory}
+\mathcal{C}(\phi)
+:=
+\mathbb{E}_{P_0}\!\left[\frac{1}{T}\sum_{t=0}^{T-1}
+\mathrm{KL}\!\left(p_\phi(Z_t\mid X_t)\,\|\,p(Z_t)\right)\right].
+\end{equation}
+In variational information bottleneck formulations, $\mathcal{C}(\phi)$ upper-bounds an information quantity between inputs and representations under suitable choices of $p(z)$ \citep{alemi2017deep,tishby2000information}, and it acts as a priced information flow constraint in sequential decision problems \citep{todorov2009linearly,rawlik2013stochastic}.
+
+\paragraph{Dual-KL mechanism (hypothesis).}
+The two divergences play distinct roles. The \emph{outer} KL defines the adversarial family of alternative market path measures used for stress evaluation, while the \emph{inner} KL in \eqref{eq:info_cost_theory} prices how much distribution-specific detail the encoder extracts from observations. Our central hypothesis is that tightening the inner information budget reduces reliance on regime-contingent microstructure mappings that satisfy Definition~\ref{def:semantic_inversion}, thereby making performance less sensitive to KL-bounded reweighting. Empirically, this should appear as a flatter robustness curve $\eta\mapsto R_\eta$ at matched baseline risk.
+
+Training minimizes baseline risk plus an information penalty (Section~\ref{subsec:training_and_stress}):
 \[
-\Big(R_0(\theta,\phi),\; R_\eta(\theta,\phi),\; \mathcal{C}(Z)\Big)
+\min_{\theta,\phi}\; R_0(\theta,\phi)+\beta\,\mathcal{C}(\phi).
 \]
-as $\beta$ varies (and as $\eta$ varies for robustness curves). Occam's Hedge predicts that, for comparable baseline performance $R_0$, policies that sit at lower information cost $\mathcal{C}(Z)$ achieve a flatter robustness curve $\eta\mapsto R_\eta$ (i.e.\ lower growth in robust risk as stress severity increases). This provides a clean way to visualize robustness without claiming a single universally optimal $\beta$.
+Sweeping $\beta$ traces a frontier between baseline performance and representation information cost, and the same trained policies can be evaluated under KL stress. We report triplets
+\[
+\Big(R_0(\theta,\phi),\; R_\eta(\theta,\phi),\; \mathcal{C}(\phi)\Big)
+\]
+as $\beta$ varies (and as $\eta$ varies for robustness curves). Occam's Hedge predicts that, at comparable baseline performance $R_0$, policies with lower $\mathcal{C}(\phi)$ exhibit slower growth of $R_\eta$ with $\eta$; this prediction is assessed in Section~\ref{sec:experiments}.
+
+\subsection{Mechanism: Information Penalties Suppress Semantically Unstable Features}
+\label{subsec:mechanism}
+
+This subsection provides a stylized mechanism linking the inner KL information cost to robustness under semantic inversion. The core point is not that the information bottleneck ``knows'' regimes; it is that regime-contingent microstructure correlations tend to be (i) high-variance across paths and (ii) valuable only in narrow regions of the baseline state distribution. Exploiting them typically requires the representation to encode fine-grained detail about $X_t$, which carries a direct KL cost. In contrast, payoff-anchored structural signals (Greeks) tend to reduce loss more uniformly across baseline paths and therefore survive under an information budget.
+
+To make this precise, consider a one-step stylized model with two scalar features $x=(x^{\mathrm{st}},x^{\mathrm{inv}})$: a structurally stable coordinate $x^{\mathrm{st}}$ and a semantically inverting coordinate $x^{\mathrm{inv}}$. Let the encoder be Gaussian with mean linear in $x$ and fixed diagonal variance,
+\[
+Z = W x + \sigma \epsilon,\qquad \epsilon\sim\mathcal{N}(0,I),
+\]
+with prior $p(z)=\mathcal{N}(0,I)$. For this encoder family, the KL-to-prior satisfies
+\[
+\mathrm{KL}\big(p_\phi(Z\mid x)\,\|\,\mathcal{N}(0,I)\big)
+= \tfrac12 \|W x\|^2 + \tfrac12\sum_k (\sigma_k^2-\log\sigma_k^2-1).
+\]
+Thus, making the representation sensitive to a feature direction (large $W$ along that coordinate) incurs an explicit information cost.
+
+Now suppose the policy is linear in $Z$ and the baseline regime admits a correlation between $x^{\mathrm{inv}}$ and low execution costs, but stress reverses the marginal effect of $x^{\mathrm{inv}}$ on costs (semantic inversion as in Definition~\ref{def:semantic_inversion}). Under KL stress, the worst-case reweighting in Proposition~\ref{prop:kl_tilt} amplifies paths with large ES loss, which in this stylized setting correspond to regions where the $x^{\mathrm{inv}}$-based trading rule induces systematically poor execution outcomes under inversion. A representation that heavily encodes $x^{\mathrm{inv}}$ therefore creates larger tail losses available for the adversary to exploit, steepening the robustness curve $\eta\mapsto R_\eta$.
+
+The inner information penalty mitigates this by making such high-sensitivity encodings expensive: for fixed baseline risk targets, increasing the information penalty $\beta$ shifts the optimal representation toward directions that reduce loss broadly without requiring high feature sensitivity. This predicts that (i) microstructure-heavy policies have larger $\mathcal{C}(\phi)$ and steeper $R_\eta$ growth, and (ii) increasing $\beta$ reduces both $\mathcal{C}(\phi)$ and the slope of $R_\eta$ at matched baseline risk, producing a robustness--information frontier.
+
+
 
 \section{Methodology}
 \label{sec:methodology}
@@ -370,9 +419,14 @@ To encode the regime-dependence of the \emph{economic meaning} of observed activ
 \]
 where $\alpha_t$ represents adverse selection (toxicity) and $m_t$ represents funding tightness (margin pressure). We choose
 \[
-g_0(\mathrm{Vol})=(\mathrm{Vol})^{-1}\quad\text{(Regime 0: high activity $\Rightarrow$ depth $\Rightarrow$ lower impact)},\qquad
-g_1(\mathrm{Vol})=\mathrm{Vol}\quad\text{(Regime 1: high activity $\Rightarrow$ toxic liquidation $\Rightarrow$ higher impact)}.
+\begin{aligned}
+g_0(\mathrm{Vol}) &= \mathrm{Vol}^{-1}
+&& \text{(Regime 0: high activity $\Rightarrow$ depth $\Rightarrow$ lower impact)},\\
+g_1(\mathrm{Vol}) &= \mathrm{Vol}
+&& \text{(Regime 1: high activity $\Rightarrow$ toxic liquidation $\Rightarrow$ higher impact)}.
+\end{aligned}
 \]
+
 This is a stylized reduced-form representation of the microstructure fact that order-flow proxies are equilibrium objects: the same signal can map to different execution conditions when the composition of trading and intermediation constraints change. Under this mechanism, a policy trained in Regime 0 that internalizes ``high volume means cheap trading'' will overtrade into Regime 1, amplifying execution costs precisely when funding constraints bind and adverse selection rises (consistent with classic adverse selection impact intuition).
 
 \paragraph{Liability and Greeks.}
@@ -397,13 +451,15 @@ z_t=\mu_\phi(x_t)+\sigma_\phi(x_t)\odot \epsilon_t,\qquad \epsilon_t\sim\mathcal
 The policy maps $z_t$ to an action, either the target position $a_t$ or trade $\Delta a_t$. The information cost is the time-and-path average of $\mathrm{KL}(\mathcal{N}(\mu_\phi,\sigma_\phi^2)\,\|\,\mathcal{N}(0,I))$.
 
 \subsection{Training and Evaluation}
+\label{subsec:training_and_stress}
 
 We train on Regime 0 only. The training objective is
 \begin{equation}
 \label{eq:hedge_objective}
-\min_{\theta,\phi}\;\widehat{R}_0(\theta,\phi)+\beta\,\widehat{\mathcal{C}}(Z).
+\min_{\theta,\phi}\;\widehat{R}_0(\theta,\phi)+\beta\,\widehat{\mathcal{C}}(\phi).
 \end{equation}
-where $\widehat{R}_0$ is an empirical estimate of a tail-risk measure of terminal hedging error $Y$ (e.g., Expected Shortfall at a fixed level) and $\widehat{\mathcal{C}}(Z)$ is the empirical information cost.
+where $\widehat{R}_0$ is an empirical estimate of a tail-risk measure of terminal hedging error $Y$ (e.g., Expected Shortfall at a fixed level) and $\widehat{\mathcal{C}}(\phi)$ is the empirical information cost.
+
 
 We evaluate each trained policy on Regime 0 and Regime 1, reporting:
 \begin{itemize}
@@ -414,7 +470,11 @@ We evaluate each trained policy on Regime 0 and Regime 1, reporting:
 \item \textbf{Semantic instability diagnostics:} sign flips in $\partial \lambda_{r,t}/\partial \mathrm{Vol}_t$, changes in the association between volume and realized costs, and instability of simple predictive probes across regimes.
 \end{itemize}
 
-To separate Occam’s Hedge from generic regularization, we include ERM deep hedging (no information penalty) and ERM with standard parameter regularization (weight decay / early stopping), along with representation ablations.
+To separate Occam’s Hedge from generic regularization, we include:
+(i) ERM deep hedging (no information penalty),
+(ii) ERM with parameter regularization (weight decay / early stopping),
+(iii) input-noise baselines (feature dropout and Gaussian noise on microstructure inputs),
+(iv) a robust-training baseline that performs adversarial reweighting of baseline paths during training using the exponential-tilt weights implied by \eqref{eq:dv_for_es_loss} at a fixed stress budget.
 
 \section{Experiments}
 \label{sec:experiments}
@@ -430,6 +490,9 @@ The main empirical questions are:
 
 We summarize results using a small set of figures and tables: (i) baseline versus stress risk by representation class, (ii) the tradeoff frontier traced by $\beta$ with stress evaluation overlaid, and (iii) mechanism diagnostics demonstrating semantic inversion and differences in policy behavior.
 
+All reported curves are averaged over multiple random seeds with confidence intervals. We also perform sensitivity analysis over the inversion-strength parameters governing $g_r(\mathrm{Vol})$ and the regime-dependent loading $b_{v,r}$ to verify that the robustness--information effects are not tied to a single calibration.
+
+
 \section{Conclusion}
 
 Deep hedging policies trained by ERM can exploit regime-contingent microstructure correlations that invert under stress, producing tail-risk blowups precisely when hedging is most needed. We introduced Occam’s Hedge under representation risk: representation-level principle governing the tradeoff between baseline risk, information cost, and robustness under execution-sensitive stress. The economic mechanism is semantic stability. Payoff-anchored structural representations (Greeks) are comparatively stable across regimes, while equilibrium-based microstructure signals are prone to concept drift, especially when funding constraints tighten and liquidity provision equilibria shift \citep{brunnermeier2009liquidity}.
@@ -438,6 +501,23 @@ Empirically, in a controlled regime-switching environment designed to induce sem
 
 \section{Appendix}
 
+\subsection{Proof of the Donsker--Varadhan form}
+\label{app:dv_proof}
+We sketch the standard variational argument. For any $Q\ll P_0$ with density $w=\frac{dQ}{dP_0}$,
+\[
+\mathbb{E}_Q[\ell_q(Y)]=\mathbb{E}_{P_0}[w\,\ell_q(Y)]
+,\qquad \mathrm{KL}(Q\|P_0)=\mathbb{E}_{P_0}[w\log w].
+\]
+Introduce a Lagrangian with multiplier $\lambda>0$ for the KL constraint and optimize pointwise over $w$ under $\mathbb{E}_{P_0}[w]=1$. The optimizer satisfies
+\[
+w^\star(\omega)\propto \exp(\lambda \ell(\omega)),
+\]
+and substituting back yields \eqref{eq:dv_for_es_loss}.
+
+\section*{Acknowledgments}
+The author thanks colleagues and mentors for helpful discussions and feedback. Any remaining errors are the author’s own.
+
+\section{References}
 \begin{thebibliography}{99}
 
 \bibitem[Brady(1988)]{brady1988report}
@@ -470,7 +550,7 @@ Monroe~D. Donsker and S.~R.~S. Varadhan.
 \newblock Asymptotic evaluation of certain {M}arkov process expectations for large time.
 \newblock \emph{Communications on Pure and Applied Mathematics}, 28(1):1--47, 1975.
 
-\bibitem[Duffie(2020)]{duffie2020safehaven}
+\bibitem[Duffie(2020)]{duffie2020intermediation}
 Darrell Duffie.
 \newblock Intermediation of {U}.{S}. Treasury markets after the Covid-19 crisis.
 \newblock \emph{Journal of Economic Perspectives}, 34(4):205--228, 2020.
@@ -590,6 +670,81 @@ Philippe Artzner, Freddy Delbaen, Jean-Marc Eber, and David Heath.
 Hans F{\"o}llmer and Alexander Schied.
 \newblock Convex measures of risk and trading constraints.
 \newblock \emph{Finance and Stochastics}, 6(4):429--447, 2002.
+
+\bibitem[Gonon et al.(2021)]{gonon2021deephedging}
+Lukas Gonon, Josef Teichmann, and Ben Wood.
+\newblock Deep hedging with rough volatility.
+\newblock \emph{SIAM Journal on Financial Mathematics}, 12(2):631--663, 2021.
+
+\bibitem[Horvath et al.(2021)]{horvath2021deephedging}
+Blanka Horvath, Josef Teichmann, and Ben Wood.
+\newblock Deep hedging under rough volatility.
+\newblock \emph{Quantitative Finance}, 21(8):1351--1376, 2021.
+
+\bibitem[Anderson et al.(2012)]{anderson2012robust}
+Evan Anderson, Lars Peter Hansen, and Thomas~J. Sargent.
+\newblock Robustness, detection, and the price of risk.
+\newblock \emph{Journal of Economic Theory}, 147(1):369--399, 2012.
+
+\bibitem[Todorov(2009)]{todorov2009linearly}
+Emanuel Todorov.
+\newblock Efficient computation of optimal actions.
+\newblock \emph{Proceedings of the National Academy of Sciences}, 106(28):11478--11483, 2009.
+
+\bibitem[Rawlik et al.(2013)]{rawlik2013stochastic}
+Konrad Rawlik, Marc Toussaint, and Sethu Vijayakumar.
+\newblock Stochastic optimal control as approximate inference.
+\newblock In \emph{Robotics: Science and Systems}, 2013.
+
+\bibitem[Hamilton(1989)]{hamilton1989markov}
+James~D. Hamilton.
+\newblock A new approach to the economic analysis of nonstationary time series and the business cycle.
+\newblock \emph{Econometrica}, 57(2):357--384, 1989.
+
+\bibitem[Gatheral et al.(2012)]{gatheral2012impact}
+Jim Gatheral, Thibault Jaisson, and Mathieu Rosenbaum.
+\newblock The volatility of high-frequency price changes.
+\newblock \emph{Quantitative Finance}, 12(1):47--63, 2012.
+
+\bibitem[B{\"u}hler et al.(2022)]{buehler2022deepbellman}
+Hans B{\"u}hler, Philipp Murray, and Ben Wood.
+\newblock Deep {B}ellman hedging.
+\newblock \emph{arXiv preprint arXiv:2207.00932}, 2022.
+
+\bibitem[Mikkil{\"a} and Kanniainen(2023)]{mikkila2023empirical}
+Oskari Mikkil{\"a} and Juho Kanniainen.
+\newblock Empirical deep hedging.
+\newblock \emph{Quantitative Finance}, 23(1):111--122, 2023.
+
+\bibitem[Murray et al.(2022)]{murray2022continuous}
+Phillip Murray, Ben Wood, Hans B{\"u}hler, Magnus Wiese, and Mikko S. Pakkanen.
+\newblock Deep hedging: Continuous reinforcement learning for hedging of general portfolios across multiple risk aversions.
+\newblock \emph{arXiv preprint arXiv:2207.07467}, 2022.
+
+\bibitem[He et al.(2022)]{he2022treasury}
+Zhiguo He, Stefan Nagel, and Zhaogang Song.
+\newblock Treasury inconvenience yields during the {COVID}-19 crisis.
+\newblock \emph{Journal of Financial Economics}, 143(1):57--79, 2022.
+
+\bibitem[Duffie et al.(2023)]{duffie2023dealer}
+Darrell Duffie, Michael J. Fleming, Frank M. Keane, Claire Nelson, Or Shachar, and Peter Van Tassel.
+\newblock Dealer capacity and {U}.{S}. {T}reasury market functionality.
+\newblock \emph{Federal Reserve Bank of New York Staff Reports}, No.~1070, 2023.
+
+\bibitem[Haddad et al.(2021)]{haddad2021viral}
+Valentin Haddad, Alan Moreira, and Tyler Muir.
+\newblock When selling becomes viral: Disruptions in debt markets in the {COVID}-19 crisis and the {F}ed's response.
+\newblock \emph{The Review of Financial Studies}, 34(11):5309--5351, 2021.
+
+\bibitem[Kargar et al.(2021)]{kargar2021bondliquidity}
+Mahyar Kargar, Benjamin Lester, David Lindsay, Shuo Liu, Pierre-Olivier Weill, and Diego Z{\'u}{\~n}iga.
+\newblock Corporate bond liquidity during the {COVID}-19 crisis.
+\newblock \emph{The Review of Financial Studies}, 34(11):5352--5401, 2021.
+
+\bibitem[Glasserman and Xu(2014)]{glasserman2014modelrisk}
+Paul Glasserman and Xingbo Xu.
+\newblock Robust risk measurement and model risk.
+\newblock \emph{Quantitative Finance}, 14(1):29--58, 2014.
 
 \end{thebibliography}
 

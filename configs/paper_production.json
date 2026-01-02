@@ -1,0 +1,55 @@
+{
+    "seed_train": 1000,
+    "seed_eval": 2000,
+    "n_steps": 30,
+    "T": 1.0,
+    "K": 100.0,
+    "vol_hat": 0.20,
+    "n_paths_train": 2000,
+    "n_paths_eval": 5000,
+    "train_eta": 0.05,
+    "stress_eta": 0.1,
+    "train_lambdas": [
+        0.001,
+        0.01,
+        0.1,
+        1.0,
+        10.0
+    ],
+    "gamma": 0.99,
+    "representations": [
+        "greeks",
+        "micro",
+        "combined"
+    ],
+    "beta_grid": [
+        0.0,
+        0.05,
+        0.1,
+        0.2,
+        0.4,
+        0.8,
+        1.2
+    ],
+    "beta_grid_curves": [
+        0.0,
+        0.05,
+        0.1,
+        0.2,
+        0.4,
+        0.8,
+        1.2
+    ],
+    "eta_grid": [
+        0.0,
+        0.02,
+        0.05,
+        0.1,
+        0.15,
+        0.2,
+        0.3
+    ],
+    "lr": 0.005,
+    "n_epochs": 300,
+    "warmup_epochs": 50
+}

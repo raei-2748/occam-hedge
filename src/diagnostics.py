@@ -1,6 +1,15 @@
 
+import torch
 import numpy as np
-from scipy.stats import norm
+from policies import FactorizedVariationalPolicy
+from experiment_occam import bs_delta_call_torch, occam_features_torch
+
+# We need occam_features_torch. It's in experiment_occam.py
+# But I defined `occam_features_torch` inside experiment_occam without exporting?
+# I should probably move features to `policies.py` or `utils.py` to share?
+# Or just re-import from experiment_occam.
+
+from experiment_occam import occam_features_torch
 
 def evaluate_path_diagnostics(
     S: np.ndarray,
@@ -10,71 +19,58 @@ def evaluate_path_diagnostics(
     K: float,
     vol_hat: float,
     representation: str,
-    weights: np.ndarray,
+    weights_or_state_dict: dict,
 ) -> dict:
     """
     Evaluates policy and returns path-level diagnostics (Mean Volume, Total Turnover, Total Cost).
-    Used for mechanism concentration analysis.
+    Uses Torch model for VIB compatibility.
     """
-    dt = T / (S.shape[1] - 1)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    S_t = torch.tensor(S, dtype=torch.float32, device=device)
+    V_t = torch.tensor(V, dtype=torch.float32, device=device)
+    lam_t = torch.tensor(lam, dtype=torch.float32, device=device)
+    
+    # Reconstruct Model
+    input_dim = 2 if representation == "combined" else 1
+    model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=2).to(device)
+    model.load_state_dict(weights_or_state_dict)
+    model.eval()
+    
     n_paths = S.shape[0]
-    n_steps = V.shape[1] 
+    n_steps = V.shape[1] # Check logic again: V is (N, steps)
+    tau_grid = torch.linspace(T, 0.0, n_steps + 1, device=device)
     
-    # Calculate Features
-    X_list = []
-    # Vectorized loop over steps
-    for t in range(n_steps):
-        S_t = S[:, t]
-        
-        # 1. Structural (delta)
-        # Avoid div by zero at maturity
-        ttl = max(T - t*dt, 1e-4)
-        d1 = (np.log(S_t/K) + 0.5 * vol_hat**2 * ttl) / (vol_hat * np.sqrt(ttl))
-        delta_bs = norm.cdf(d1)
-        
-        # 2. Microstructure (volume proxy)
-        micro_feat = V[:, t]
-        
-        if representation == "greeks":
-            features = delta_bs[:, None]
+    a = torch.zeros(n_paths, device=device)
+    path_turnover = torch.zeros(n_paths, device=device)
+    path_cost = torch.zeros(n_paths, device=device)
+    
+    with torch.no_grad():
+        for t in range(n_steps):
+            feats = occam_features_torch(
+                representation, 
+                S_t[:, t], 
+                torch.full((n_paths,), tau_grid[t], device=device), 
+                V_t[:, t], 
+                K, 
+                vol_hat
+            )
             
-        elif representation == "micro":
-            # For micro-only, typically we might include moneyness or just V.
-            # Based on standard logic in experiment_occam.occam_features_numpy:
-            # if rep == "micro": feat = [V_t]
-            features = micro_feat[:, None]
+            # For diagnostics, we look at the mean action (deterministic) or sample?
+            # Usually deterministic (mu) for analysis.
+            # But the model returns (action, mus, logvars). 
+            # The action computed by decoder from sampled z.
+            action, _, _ = model(feats)
             
-        elif representation == "combined":
-            features = np.stack([delta_bs, micro_feat], axis=1)
-        
-        else:
-            raise ValueError(f"Unknown rep {representation}")
+            a_new = torch.clamp(action, -5.0, 5.0)
+            da = a_new - a
             
-        X_list.append(features)
-        
-    X = np.stack(X_list, axis=1) # (N, T, Dim)
-    
-    # Compute Actions: a_t = X_t @ weights
-    # weights: (Dim,)
-    actions = np.einsum('ntd,d->nt', X, weights)
-    
-    # Compute Trades: Delta a_t = a_t - a_{t-1}, a_{-1}=0
-    actions_padded = np.concatenate([np.zeros((n_paths, 1)), actions], axis=1)
-    trades = np.diff(actions_padded, axis=1) # (N, T)
-    
-    # Metrics per path
-    turnover_per_path = np.sum(np.abs(trades), axis=1)
-    
-    # lam is usually 2D (N, T) matching steps. If V is (N, T), lam is (N, T).
-    # ensure shape match. S is (N, N_STEPS), V is (N, N_STEPS).
-    # Cost = 0.5 * lambda * trade^2
-    costs_per_path = np.sum(0.5 * lam * trades**2, axis=1)
-    
-    # Mean volume per path
-    mean_volume_per_path = np.mean(V, axis=1)
-    
+            path_turnover += torch.abs(da)
+            path_cost += 0.5 * lam_t[:, t] * da**2
+            
+            a = a_new
+
     return {
-        "turnover": turnover_per_path,
-        "cost": costs_per_path,
-        "volume": mean_volume_per_path
+        "turnover": path_turnover.cpu().numpy(),
+        "cost": path_cost.cpu().numpy(),
+        "volume": np.mean(V, axis=1)
     }
