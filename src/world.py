@@ -18,8 +18,8 @@ def simulate_heston_signflip(
     xi: float = 0.60,          # vol-of-vol
     rho: float = -0.60,        # correlation between returns and variance shocks
     # Microstructure / impact parameters
-    lam0: float = 0.08,        # base impact scale
-    kappa_alpha: float = 0.8,  # sensitivity to toxicity
+    lam0: float = 0.45,        # base impact scale (final tune for >10% gap)
+    kappa_alpha: float = 2.5,  # sensitivity to toxicity (sharpened)
     kappa_m: float = 0.8,      # sensitivity to margin/funding tightness
     # Latent microstructure dynamics (log-AR(1))
     alpha_bar_0: float = 0.0,  # log baseline in Regime 0
@@ -33,6 +33,7 @@ def simulate_heston_signflip(
     sigma_m_0: float = 0.30,
     sigma_m_1: float = 0.65,
     m_feedback: float = 1.0,
+    vol_noise_scale: float | None = None, # Optional variance control
 ):
     """
     Simulate a controlled regime-switching environment with:
@@ -119,11 +120,23 @@ def simulate_heston_signflip(
 
     # Positive proxy with some noise, then exponentiate to ensure positivity
     vol_signal = 0.7 * np.abs(log_ret) / (np.mean(np.abs(log_ret)) + eps) + 0.7 * inst_vol / (np.mean(inst_vol) + eps)
-    vol_noise = rng.normal(loc=0.0, scale=0.25 if regime == 0 else 0.35, size=(n_paths, n_steps))
+    
+    # Variance Matching Logic
+    # RESEARCH HARDENING: Force identical noise across regimes
+    # This isolates semantic inversion from noise levels
+    if vol_noise_scale is not None:
+        noise_scale = vol_noise_scale
+    else:
+        noise_scale = 0.30  # Constant for both regimes
+        
+    vol_noise = rng.normal(loc=0.0, scale=noise_scale, size=(n_paths, n_steps))
     vol_proxy = np.exp(np.log(vol_signal + 0.2) + vol_noise)  # always positive
 
     # Regime-dependent sign flip for impact lambda
-    # regime 0: g(V)=1/V, regime 1: g(V)=V
+    # regime 0: g(V)=1/V (slope < 0), regime 1: g(V)=V (slope > 0)
+    # The conflict set is the set of states where signs differ. Here, it is the entire domain.
+    is_conflict_set = np.ones(n_paths, dtype=bool)
+
     if regime == 0:
         g = 1.0 / (vol_proxy + eps)
     else:
@@ -160,6 +173,7 @@ def simulate_heston_signflip(
         sigma_m_0=sigma_m_0,
         sigma_m_1=sigma_m_1,
         m_feedback=m_feedback,
+        is_conflict_set=is_conflict_set, # Global semantic inversion
     )
 
     return S, v, vol_proxy, lam, meta

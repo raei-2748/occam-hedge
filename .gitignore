@@ -1,15 +1,25 @@
+# Python Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Environments
 .venv/
 venv/
-.pytest_cache/
-__pycache__/
+env/
+
+# Data & Artifacts
+runs/
+figures/
+diagnostics/
+archive/
+*.csv
+*.png
+*.json
+
+# OS files
 .DS_Store
 
-# Ignore all runs by default
-runs/**
-
-# Except the paper-grade minimal example
-!runs/paper_example/
-!runs/paper_example/**
-
-# Ignore archive folder (diagnostic history)
-archive/
+# Include only necessary patterns explicitly if needed
+# But usually, it's better to exclude everything above and then include src/ configs/ etc.

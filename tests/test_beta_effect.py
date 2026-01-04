@@ -51,11 +51,12 @@ def test_beta_effect():
     )
     
     # Compute difference
-    diff = np.linalg.norm(w_beta0 - w_beta100)
+    diff = 0.0
+    for k in w_beta0.keys():
+        diff += torch.norm(w_beta0[k] - w_beta100[k]).item()
     
-    print(f"β=0 weights: {w_beta0}")
-    print(f"β=100 weights: {w_beta100}")
-    print(f"L2 difference: {diff}")
+    # print(f"β=0 weights keys: {list(w_beta0.keys())}")
+    print(f"L2 difference across all parameters: {diff}")
     
     # CRITICAL: If β is working, weights MUST differ
     assert diff > 0.001, f"β has no effect! Weights are identical (diff={diff})"

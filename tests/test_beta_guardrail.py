@@ -13,6 +13,7 @@ Expected behavior:
 import sys
 from pathlib import Path
 import numpy as np
+import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "src"))
@@ -66,7 +67,7 @@ def test_beta_penalty_effect():
             S_eval, V_eval, lam_eval,
             T=1.0, K=100.0, vol_hat=0.2,
             representation="greeks",
-            weights=w
+            weights_or_state_dict=w
         )
         
         results[beta] = {
@@ -76,7 +77,7 @@ def test_beta_penalty_effect():
             'exec_cost': exec_cost
         }
         
-        print(f"  Weights: {w}")
+        # print(f"  Weights: {w}")
         print(f"  Info cost: {info_cost:.6f}")
         print(f"  Turnover: {turnover:.6f}")
     
@@ -90,7 +91,10 @@ def test_beta_penalty_effect():
     info0 = results[0.0]['info_cost']
     info100 = results[100.0]['info_cost']
     
-    weight_diff = np.linalg.norm(w0 - w100)
+    weight_diff = 0.0
+    for k in w0.keys():
+        weight_diff += torch.norm(w0[k] - w100[k]).item()
+        
     info_reduction = (info0 - info100) / info0 if info0 > 0 else 0
     
     print(f"Weight difference (L2): {weight_diff:.6f}")

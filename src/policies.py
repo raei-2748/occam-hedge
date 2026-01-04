@@ -69,7 +69,11 @@ class VariationalEncoder(nn.Module):
         
     def forward(self, x):
         h = self.net(x)
-        return self.mu(h), self.logvar(h)
+        mu = self.mu(h)
+        logvar = self.logvar(h)
+        # Soft-clamping to prevent numerical explosion during unconstrained training (beta=0)
+        logvar = torch.clamp(logvar, min=-10.0, max=2.0)
+        return mu, logvar
 
 class FactorizedVariationalPolicy(nn.Module):
     """
