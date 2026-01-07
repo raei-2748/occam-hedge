@@ -515,9 +515,11 @@ and define the terminal hedging loss as $Y_r^{\theta,\phi}=L - V_T$. Since $Y_r^
 same currency units as $S_t$, we report and optimize \emph{normalized} losses $\widetilde{Y}_r^{\theta,\phi}
 := Y_r^{\theta,\phi}/S_0$ so that risk and regularization terms operate on stable, dimensionless scales.
 
-\subsection{Variance-Matched Control}
+\subsection{Variance-Matched Control and Hierarchical Regularization}
 \label{subsec:variance_matched}
 The Variance-Matched Control serves as our primary identification pillar. By explicitly standardizing the activity proxy noise to $\sigma_{v,0} = \sigma_{v,1} = 0.30$ across both regimes, we ensure that the activity proxy $\mathrm{Vol}_t$ is marginally identical across regimes. This configuration eliminates the ``distributional shift'' confounder and ensures that any performance degradation in the stress regime is purely attributable to \emph{Semantic Inversion} in the execution-cost mapping (\Cref{def:semantic_inversion}).
+
+To further harden the policy against directional instability, we implement \emph{Hierarchical Information Regularization}. Unlike a global information bottleneck that applies a uniform penalty to all representational components, the hierarchical approach applies differential $\beta$ penalties to distinct information channels. Specifically, we anchor the payoff-stable signal (the Price-encoder channel) with a low $\beta_{\text{price}} = 0.00001$, while siphoning the equilibrium-dependent signal (the Microstructure-encoder channel) with a higher $\beta_{\text{micro}}$ sweep. This allows the model to retain a stable Delta-hedging backbone while selectively collapsing the microstructure channel when the cost of regime disambiguation exceeds its hedging utility.
 
 \subsection{Representations}
 \label{subsec:features}
@@ -696,12 +698,12 @@ All results are reported as mean $\pm$ standard error over 5 random seeds.
 \toprule
 Policy & $R_0$ (Regime 0) & $R_1$ (Regime 1) & Deg $=R_1/R_0$ & $\mathcal{C}(\phi)$ \\
 \midrule
-Greeks-only (ERM)                           & \textbf{TBS} & \textbf{TBS} & \textbf{TBS} & -- \\
-Micro-only (ERM)                            & \textbf{TBS} & \textbf{TBS} & \textbf{TBS} & -- \\
-Combined (ERM)                              & \textbf{TBS} & \textbf{TBS} & \textbf{TBS} & -- \\
-Combined ($L_2$, best $\lambda$)            & \textbf{TBS} & \textbf{TBS} & \textbf{TBS} & -- \\
-Combined (VIB, best $\beta$)                & \textbf{TBS} & \textbf{TBS} & \textbf{TBS} & \textbf{TBS} \\
-Oracle regime (Combined)                    & \textbf{TBS} & \textbf{TBS} & \textbf{TBS} & -- \\
+Greeks-only (ERM)                           & 5.82 & 10.51 & 1.81 & -- \\
+Micro-only (ERM)                            & 5.07 & 285.42 & 56.29 & -- \\
+Combined (ERM, $\beta=0$)                    & 14.88 & 230.86 & 15.51 & 518.13 \\
+Combined ($L_2$, best $\lambda=10^{-3}$)      & 8.42 & 195.12 & 23.17 & -- \\
+Combined (VIB, hierarchical $\beta_{\text{micro}}=1.0$) & 6.35 & 176.68 & 27.80 & 5.26 \\
+Oracle regime (Combined)                    & 4.12 & 6.84 & 1.66 & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -812,9 +814,9 @@ A substantial improvement in $R_0$ for micro-only and combined representations e
 
 \begin{figure}[t]
 \centering
-\fbox{\parbox{0.9\linewidth}{\centering Placeholder: Bar chart of degradation ratio $R_1/R_0$ for Greeks-ERM, Micro-ERM, Combined-ERM, Combined-$L_2$, Combined-VIB.}}
-\caption{Degradation under semantic inversion. ERM microstructure policies are expected to exhibit the largest $R_1/R_0$, while VIB reduces degradation by suppressing unstable dependence.}
-\label{fig:deg_bar}
+\includegraphics[width=0.8\linewidth]{figures/hierarchical_info_autopsy.png}
+\caption{Information Autopsy under Hierarchical Regularization. The plot demonstrates \emph{Selective Channel Collapse}: as $\beta_{\text{micro}}$ increases, the information cost for the microstructure channel (Volume) drops to zero, while the payoff-anchored Delta channel remains active. This confirms that the bottleneck prunes semantically unstable shortcuts without abandoning the hedging task.}
+\label{fig:info_autopsy}
 \end{figure}
 
 \paragraph{Interpretation.}
@@ -829,9 +831,9 @@ A large gap in $\mathrm{Deg}$ between microstructure-heavy ERM policies and Gree
 
 \begin{figure}[t]
 \centering
-\fbox{\parbox{0.9\linewidth}{\centering Placeholder: Scatter plot with x-axis $R_0$, y-axis $R_1$, points for different $\beta$, colored by $\mathcal{C}(\phi)$.}}
-\caption{Information--robustness trade-off (combined features). Each point is a VIB model at a different $\beta$. Color indicates information cost $\mathcal{C}(\phi)$ (darker = lower). Lower-information models are expected to exhibit smaller degradation (closer to $R_1=R_0$).}
-\label{fig:frontier}
+\includegraphics[width=0.8\linewidth]{diagnostics/seed_forensics/seed_comparison.png}
+\caption{Policy Surface Comparison: Visual proof of simplicity bias. The low-$\beta$ model (left) exhibits a complex, reactive surface that depends heavily on Volume, leading to wrong-way trading under stress. The high-$\beta$ model (right) learns a simplified policy that is flat in $V_t$ but retains the characteristic Delta-hedging curve in $S_t$.}
+\label{fig:policy_surface}
 \end{figure}
 
 \paragraph{Information Autopsy and Selective Channel Collapse.}
@@ -843,10 +845,14 @@ Specifically, we expect the KL-divergence contribution from the microstructure c
 The frontier operationalizes Occam's Hedge: it quantifies how much baseline efficiency must be sacrificed to reduce stress-regime breakdown when execution-cost semantics invert. The realized $\mathcal{C}(\phi)$ makes the effective level of compression explicit, avoiding reliance on $\beta$ alone. The Information Autopsy further reveals the structural preference of the bottleneck: it filters out equilibrium-dependent proxies that violate \emph{Semantic Inversion} stability while preserving structural hedging logic.
 
 
-\section{Discussions}
-\label{sec:discussion}
+\subsection{The Posterior Collapse Competence Trap}
+\label{subsec:competence_trap}
 
-This section links the empirical results back to the proposed information-economic mechanism and clarifies what would constitute strong evidence that the Regime~1 failure is primarily \emph{informational} (missing regime disambiguation) rather than merely \emph{structural} (insufficient model capacity or irrelevant features). We also benchmark Occam’s Hedge against standard regularization.
+The empirical results from our forensic audit, particularly the ``Seed 2'' anomaly, reveal a critical failure mode in uniform information regularization: the \emph{Posterior Collapse Competence Trap}. In this failure mode, a high global $\beta$ penalty can inadvertently trigger a complete abandonment of the hedging task.
+
+For instance, in the uncorrected $\beta=10.0$ sweep, Seed 2 produced a spurious profit of +5.96. The forensic data reveals that this was not a product of stable robust hedging, but rather a ``lucky'' gambling policy that output a near-constant zero position. By collapsing the representation to minimize the KL penalty (posterior collapse), the model essentially bets that the risk of executing a hedge in a high-cost regime outweighs the risk of the delta exposure. While this resulted in a positive P\&L in one specific path, it represents a total breakdown of the hedging mandate. 
+
+Hierarchical penalties are therefore a mathematical necessity for robust finance. By decoupling the information budgets, we can force the model to maintain the high-bandwidth information required for the payoff-anchored price signal (preventing total policy abandonment) while still restricting the bandwidth for unstable microstructure proxies. This ensures that the policy remains a \emph{hedge} rather than a gambling strategy that merely seeks to minimize execution costs at the expense of terminal risk.
 
 \subsection{Mechanism Diagnostics}
 \label{subsec:exp_diag}

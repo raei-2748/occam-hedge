@@ -20,7 +20,7 @@ from policies import bs_delta_call, FactorizedVariationalPolicy
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from features import occam_features_torch
+from features import occam_features_torch, get_feature_dim
 
 def compute_hedging_losses_torch(
     model: nn.Module,
@@ -130,7 +130,7 @@ def train_model(
         beta_micro = beta
         hierarchical = False
     
-    lr = training_config.get("lr", 0.005) # Lower LR for VIB stability?
+    lr = training_config.get("lr", 0.001) # Reduced default LR for stability
     n_epochs = training_config.get("n_epochs", 200)
     warmup_epochs = training_config.get("warmup_epochs", 50)
     
@@ -164,7 +164,16 @@ def train_model(
             loss_obj = risk + info_penalty
             mode = "robust"
             
+        # --- STABILIZATION: NaN Guardrail ---
+        if torch.isnan(loss_obj):
+            print(f"CRITICAL: NaN detected at epoch {epoch}. Aborting.")
+            break
+            
         loss_obj.backward()
+        
+        # --- STABILIZATION: Gradient Clipping ---
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
         optimizer.step()
         
         if epoch % 10 == 0:
@@ -209,14 +218,7 @@ def hedge_on_paths(
     lam_t = torch.tensor(lam, dtype=torch.float32, device=device)
     
     # Reconstruct Model
-    if representation == "combined":
-        input_dim = 2
-    elif representation == "micro":
-        input_dim = 3
-    elif representation == "oracle":
-        input_dim = 4
-    else:
-        input_dim = 1
+    input_dim = get_feature_dim(representation)
         
     # Note: latent_dim must match training. We assume 2 here per user preference or config
     # Ideally config is passed, but we'll assume default 2 for now
@@ -280,14 +282,7 @@ def train_weights(
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    if representation == "combined":
-        input_dim = 2
-    elif representation == "micro":
-        input_dim = 3
-    elif representation == "oracle":
-        input_dim = 4
-    else:
-        input_dim = 1
+    input_dim = get_feature_dim(representation)
     
     model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=2).to(device)
     
@@ -296,9 +291,9 @@ def train_weights(
         "train_eta": train_eta,
         "train_lambdas": train_lambdas,
         "gamma": gamma,
-        "lr": 0.005,
+        "lr": 0.001,
         "n_epochs": 150, 
-        "warmup_epochs": 30
+        "warmup_epochs": 50
     }
     cfg.update(kwargs)
     

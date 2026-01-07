@@ -1,4 +1,5 @@
 import numpy as np
+import math
 
 
 def logsumexp(x: np.ndarray) -> float:
@@ -135,16 +136,24 @@ try:
         lambdas: (N_lam,)
         Returns scalar tensor.
         """
+        if eta == 0.0:
+            return torch.mean(losses)
+            
+        # Filter lambdas to avoid division by zero
+        safe_lambdas = lambdas[lambdas > 0]
+        if safe_lambdas.shape[0] == 0:
+            # If no positive lambdas, fallback to mean (though this shouldn't happen)
+            return torch.mean(losses)
+
         # (N_lam, B)
-        scaled = lambdas.unsqueeze(1) * losses.unsqueeze(0)
+        scaled = safe_lambdas.unsqueeze(1) * losses.unsqueeze(0)
         
         # log_mean_exp over batch (dim 1)
-        # LME = log(mean(exp(X))) = log(sum(exp(X))) - log(N)
         lse = torch.logsumexp(scaled, dim=1) # (N_lam,)
-        lme = lse - np.log(losses.shape[0])
+        lme = lse - math.log(losses.shape[0])
         
         # Dual function: g(lam) = (lme + eta) / lam
-        g = (lme + eta) / lambdas
+        g = (lme + eta) / safe_lambdas
         
         # Return min over lambdas
         return torch.min(g)

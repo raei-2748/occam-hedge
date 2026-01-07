@@ -3,6 +3,18 @@ import torch
 import numpy as np
 import math
 
+def get_feature_dim(representation: str) -> int:
+    """Returns the input dimension for a given representation."""
+    if representation == "greeks":
+        return 1
+    if representation == "micro":
+        return 3
+    if representation == "combined":
+        return 2
+    if representation == "oracle":
+        return 4
+    raise ValueError(f"Unknown representation: {representation}")
+
 def bs_delta_call_torch(S: torch.Tensor, K: float, tau: torch.Tensor, vol: float, r: float = 0.0) -> torch.Tensor:
     eps = 1e-12
     tau = torch.clamp(tau, min=eps)

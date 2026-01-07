@@ -17,9 +17,13 @@ archive/
 *.csv
 *.png
 *.json
+*.log
+!paper_frontal.csv # Keep if specifically needed, but usually better to exclude all
+!README.md
+!requirements.txt
+!.gitignore
+!*.py
+!*.tex
 
 # OS files
 .DS_Store
-
-# Include only necessary patterns explicitly if needed
-# But usually, it's better to exclude everything above and then include src/ configs/ etc.
