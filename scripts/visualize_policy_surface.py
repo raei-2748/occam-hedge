@@ -37,7 +37,7 @@ def load_model_from_checkpoint(checkpoint_dir: Path, representation: str):
     
     # Load model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=2).to(device)
+    model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=8).to(device)
     
     # Find weights file (could be in different formats)
     weights_file = checkpoint_dir / "model_weights.pt"

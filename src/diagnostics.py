@@ -32,7 +32,7 @@ def evaluate_path_diagnostics(
     
     # Reconstruct Model
     input_dim = 2 if representation == "combined" else 1
-    model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=2).to(device)
+    model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=8).to(device)
     model.load_state_dict(weights_or_state_dict)
     model.eval()
     

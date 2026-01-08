@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import io
+import math
 
 from utils import set_seeds, get_git_revision_hash
 from paper_config import Config, run_id_from_config
@@ -21,6 +22,16 @@ from policies import bs_delta_call, FactorizedVariationalPolicy
 ROOT = Path(__file__).resolve().parents[1]
 
 from features import occam_features_torch, get_feature_dim
+
+def bs_delta_call_torch(S, K, tau, vol, r=0.0):
+    device = S.device
+    eps = 1e-12
+    # Ensure tau matches S shape or is broadcastable
+    tau = torch.maximum(tau, torch.tensor(eps, device=device))
+    vol = max(vol, 1e-12)
+    
+    d1 = (torch.log((S + eps) / K) + (r + 0.5 * vol * vol) * tau) / (vol * torch.sqrt(tau))
+    return 0.5 * (1.0 + torch.erf(d1 / math.sqrt(2.0)))
 
 def compute_hedging_losses_torch(
     model: nn.Module,
@@ -92,6 +103,9 @@ def compute_hedging_losses_torch(
     payoff = torch.relu(S[:, -1] - K)
     losses = payoff - pnl - cost
     
+    # Normalize losses by initial stock price to match dimensionless beta
+    losses = losses / S[:, 0]
+
     # Average KL over time steps
     avg_kl_per_channel = total_kl_per_channel / actual_steps
     total_info_cost = torch.sum(avg_kl_per_channel)
@@ -220,9 +234,8 @@ def hedge_on_paths(
     # Reconstruct Model
     input_dim = get_feature_dim(representation)
         
-    # Note: latent_dim must match training. We assume 2 here per user preference or config
-    # Ideally config is passed, but we'll assume default 2 for now
-    model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=2).to(device)
+    # Note: latent_dim must match training. User request = 8.
+    model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=8).to(device)
     
     if isinstance(weights_or_state_dict, dict):
         model.load_state_dict(weights_or_state_dict)
@@ -236,43 +249,49 @@ def hedge_on_paths(
         losses_t, info_cost_t, _ = compute_hedging_losses_torch(
             model, S_t, V_t, lam_t, T, K, vol_hat, representation, action_clip, R=R
         )
-        # We need other metrics: turnover, exec_cost
-        # Re-run loop or extract? 
-        # compute_hedging_losses_torch doesn't return turnover.
-        # Let's add turnover to compute_hedging_losses_torch? 
-        # Or hack it here using numpy loop if we want exact same metrics?
-        # Actually, let's just stick to "Robust ES" logic. 
-        # But run_paper.py expects (losses, info_cost, turnover, exec_cost).
-        
         # Quick loop for metrics (using model)
+        # We need to flatten both V and da (absolute changes) for wrong-way score
+        
         n_paths = S.shape[0]
         n_steps = S.shape[1] - 1
-        a = torch.zeros(n_paths, device=device)
-        cost = torch.zeros(n_paths, device=device)
-        turnover = torch.zeros(n_paths, device=device)
         
         tau_grid = torch.linspace(T, 0.0, n_steps + 1, device=device)
+
+        a = torch.zeros(n_paths, device=device)
+        path_cost = torch.zeros(n_paths, device=device)
+        path_turnover = torch.zeros(n_paths, device=device)
         
+        da_list = []
+        V_list = []
+
         for t in range(n_steps):
             R_t = R[:, t] if R is not None else None
             feats = occam_features_torch(representation, S_t[:, t], torch.full((n_paths,), tau_grid[t], device=device), V_t[:, t], K, vol_hat, R_t=R_t)
-            # Use MEAN for evaluation (deterministic policy mode)? 
-            # Or sample? VIB usually samples. But for evaluation/hedging we might want Expected Action.
-            # "The policy maps the SAMPLED z".
-            # If we want deterministic eval, we should use mu.
-            # But the policy is trained on samples. 
-            # Strict VIB eval should sample.
             action, _, _ = model(feats) 
             a_new = torch.clamp(action, -action_clip, action_clip)
             da = a_new - a
-            cost += 0.5 * lam_t[:, t] * da**2
-            turnover += torch.abs(da)
+            
+            path_cost += 0.5 * lam_t[:, t] * da**2
+            path_turnover += torch.abs(da)
+            
+            da_list.append(da)
+            V_list.append(V_t[:, t])
+            
             a = a_new
             
-        turnover_rate = torch.mean(turnover) / n_steps
-        exec_cost = torch.mean(cost) / n_steps
+        turnover_rate = torch.mean(path_turnover) / n_steps
+        exec_cost = torch.mean(path_cost) / n_steps
         
-    return losses_t.cpu().numpy(), info_cost_t.item(), turnover_rate.item(), exec_cost.item()
+        # Stack and Correlation
+        stack_da = torch.stack(da_list, dim=1).flatten().abs()
+        stack_V = torch.stack(V_list, dim=1).flatten()
+        
+        # Pearson Correlation
+        vx = stack_da - torch.mean(stack_da)
+        vy = stack_V - torch.mean(stack_V)
+        da_vol_corr = torch.sum(vx * vy) / (torch.sqrt(torch.sum(vx ** 2)) * torch.sqrt(torch.sum(vy ** 2)) + 1e-8)
+        
+    return losses_t.cpu().numpy(), info_cost_t.item(), turnover_rate.item(), exec_cost.item(), da_vol_corr.item()
 
 
 def train_weights(
@@ -284,7 +303,7 @@ def train_weights(
     
     input_dim = get_feature_dim(representation)
     
-    model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=2).to(device)
+    model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=8).to(device)
     
     cfg = {
         "beta": beta,
