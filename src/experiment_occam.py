@@ -101,7 +101,7 @@ def compute_hedging_losses_torch(
         a = a_new
         
     payoff = torch.relu(S[:, -1] - K)
-    losses = payoff - pnl - cost
+    losses = payoff - pnl + cost  # Cost is a PENALTY (positive)
     
     # Normalize losses by initial stock price to match dimensionless beta
     losses = losses / S[:, 0]

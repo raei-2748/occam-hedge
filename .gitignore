@@ -18,7 +18,8 @@ archive/
 *.png
 *.json
 *.log
-!paper_frontal.csv # Keep if specifically needed, but usually better to exclude all
+!paper_frontier.csv # Keep final results csv
+!figures/fig_*.png # Keep paper figures
 !README.md
 !requirements.txt
 !.gitignore

@@ -63,7 +63,7 @@ def test_beta_penalty_effect():
         )
         
         # Evaluate
-        losses, info_cost, turnover, exec_cost = hedge_on_paths(
+        losses, info_cost, turnover, exec_cost, _ = hedge_on_paths(
             S_eval, V_eval, lam_eval,
             T=1.0, K=100.0, vol_hat=0.2,
             representation="greeks",

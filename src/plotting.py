@@ -66,9 +66,11 @@ def plot_robust_risk_vs_eta(curves_data: list, out_path: Path, use_bands=False):
     # Organize by representation
     reps = sorted(list(set(d["representation"] for d in curves_data)))
     
+    if not reps:
+        print("No data for robustness curves plot.")
+        return
+    
     fig, axes = plt.subplots(1, len(reps), figsize=(4 * len(reps), 4), sharey=True)
-    if len(reps) == 1:
-        axes = [axes]
         
     for i, rep in enumerate(reps):
         ax = axes[i]
@@ -216,8 +218,10 @@ def plot_turnover_concentration(diag_data: list, out_path: Path):
     
     # Plotting
     reps = df_plot["representation"].unique()
+    if len(reps) == 0:
+        print("No data for turnover concentration plot.")
+        return
     fig, axes = plt.subplots(1, len(reps), figsize=(4*len(reps), 4), sharey=True)
-    if len(reps) == 1: axes = [axes]
     
     for i, rep in enumerate(reps):
         ax = axes[i] if len(reps) > 1 else axes[0]
