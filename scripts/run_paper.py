@@ -39,6 +39,25 @@ def main():
     parser.add_argument("--config", default=str(ROOT / "configs" / "paper_run.json"))
     parser.add_argument("--seeds", type=int, default=5, help="Number of seeds to run")
     parser.add_argument("--output_dir", type=str, default=None, help="Force specific output directory")
+    
+    # TASK 1: Lagged micro features for temporal regime inference
+    parser.add_argument("--micro_lags", type=int, default=0, 
+                        help="Number of lagged micro signals (K) for temporal regime inference")
+    
+    # TASK 2: Previous action for Markov observation
+    parser.add_argument("--include_prev_action", action="store_true",
+                        help="Include previous action in observation for Markovity")
+    
+    # TASK 3: Regime imbalance for competence trap
+    parser.add_argument("--regime_mix_p", type=float, default=0.5,
+                        help="Fraction of training data from R0 (rest from R1). 0.5 = balanced.")
+    
+    # Leak parameters for temporal signal
+    parser.add_argument("--leak_phi_r0", type=float, default=0.0,
+                        help="AR(1) coefficient for regime 0 noise")
+    parser.add_argument("--leak_phi_r1", type=float, default=0.0,
+                        help="AR(1) coefficient for regime 1 noise")
+    
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -123,24 +142,60 @@ def main():
         
         print(f"\n--- Seed {seed_idx+1}/{args.seeds} [Train={current_train_seed}, Eval={current_eval_seed}] ---")
         
-        # 2a. Data Generation
-        set_seeds(current_train_seed)
-        S_train, _, V_train, lam_train, _ = simulate_heston_signflip(
-            regime=0, n_paths=int(cfg["n_paths_train"]), n_steps=n_steps, T=T, seed=current_train_seed,
-            vol_noise_scale=0.30  # EXPLICIT VARIANCE-MATCHED CONTROL
-        )
+        # 2a. Data Generation with mixed-regime training (Task 3)
+        n_paths_train = int(cfg["n_paths_train"])
+        
+        if args.regime_mix_p < 1.0 and args.regime_mix_p > 0.0:
+            # Mixed-regime training for competence trap
+            n_r0 = int(n_paths_train * args.regime_mix_p)
+            n_r1 = n_paths_train - n_r0
+            
+            set_seeds(current_train_seed)
+            S_r0, _, V_r0, lam_r0, _ = simulate_heston_signflip(
+                regime=0, n_paths=n_r0, n_steps=n_steps, T=T, seed=current_train_seed,
+                vol_noise_scale=0.30,
+                leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
+            )
+            S_r1, _, V_r1, lam_r1, _ = simulate_heston_signflip(
+                regime=1, n_paths=n_r1, n_steps=n_steps, T=T, seed=current_train_seed + 5000,
+                vol_noise_scale=0.30,
+                leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
+            )
+            
+            # Concatenate training data
+            S_train = np.vstack([S_r0, S_r1])
+            V_train = np.vstack([V_r0, V_r1])
+            lam_train = np.vstack([lam_r0, lam_r1])
+            
+            # Shuffle to avoid temporal ordering bias
+            idx = np.random.permutation(n_paths_train)
+            S_train = S_train[idx]
+            V_train = V_train[idx]
+            lam_train = lam_train[idx]
+            
+            print(f"  Mixed-regime training: R0={n_r0}, R1={n_r1} (mix_p={args.regime_mix_p})")
+        else:
+            # Original single-regime training (backward compatible)
+            set_seeds(current_train_seed)
+            S_train, _, V_train, lam_train, _ = simulate_heston_signflip(
+                regime=0, n_paths=n_paths_train, n_steps=n_steps, T=T, seed=current_train_seed,
+                vol_noise_scale=0.30,
+                leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
+            )
         
         set_seeds(current_eval_seed)
         S_eval, _, V_eval, lam_eval, _ = simulate_heston_signflip(
             regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed,
-            vol_noise_scale=0.30
+            vol_noise_scale=0.30,
+            leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
         )
         
         # 2b. Semantic Flip Check (Regime 0 vs Regime 1)
-        # Generate a small Regime 1 batch for correlation check
+        # Generate a small Regime 1 batch for correlation check and stress testing
         S_stress, _, V_stress, lam_stress, _ = simulate_heston_signflip(
             regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
-            vol_noise_scale=0.30
+            vol_noise_scale=0.30,
+            leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
         )
         
         # Calculate correlations (Volume vs Lambda)
@@ -167,10 +222,12 @@ def main():
             for beta in all_betas:
                 # Key for storage (micro beta if hierarchical, else beta itself)
                 beta_key = beta_to_key(beta)
-                # Train
+                # Train with Task 1 & 2 parameters
                 w = train_weights(
                     S_train, V_train, lam_train, T, K, vol_hat,
                     rep, beta, train_eta, train_lambdas, gamma,
+                    micro_lags=args.micro_lags,
+                    include_prev_action=args.include_prev_action,
                     n_epochs=int(cfg.get("n_epochs", 150)),
                     warmup_epochs=int(cfg.get("warmup_epochs", 30))
                 )
@@ -191,7 +248,8 @@ def main():
                 
                 # Eval on Regime 0
                 losses, info_cost, turnover, exec_cost, da_vol_corr_0 = hedge_on_paths(
-                    S_eval, V_eval, lam_eval, T, K, vol_hat, rep, w
+                    S_eval, V_eval, lam_eval, T, K, vol_hat, rep, w,
+                    micro_lags=args.micro_lags, include_prev_action=args.include_prev_action
                 )
                 info_costs[beta_key] = info_cost
                 
@@ -213,7 +271,8 @@ def main():
 
                 # Eval on Regime 1 (Stress) for Wrong-Way Score
                 losses1, info_cost1, turnover1, exec_cost1, da_vol_corr_1 = hedge_on_paths(
-                    S_stress, V_stress, lam_stress, T, K, vol_hat, rep, w
+                    S_stress, V_stress, lam_stress, T, K, vol_hat, rep, w,
+                    micro_lags=args.micro_lags, include_prev_action=args.include_prev_action
                 )
                 # Wrong-Way Score for Regime 1: Expected Negative Correlation (Trade LESS as Vol explodes)
                 # Or rather: In Regime 1 (Inverted), high vol -> signal is noise -> should scale down.

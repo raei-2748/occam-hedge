@@ -34,6 +34,9 @@ def simulate_heston_signflip(
     sigma_m_1: float = 0.65,
     m_feedback: float = 1.0,
     vol_noise_scale: float | None = None, # Optional variance control
+    # TASK B: Leaky simulator - AR(1) noise for temporal regime signal
+    leak_phi_r0: float = 0.0,  # AR(1) coefficient for regime 0 (default: i.i.d.)
+    leak_phi_r1: float = 0.0,  # AR(1) coefficient for regime 1 (default: i.i.d.)
 ):
     """
     Simulate a controlled regime-switching environment with:
@@ -128,8 +131,28 @@ def simulate_heston_signflip(
         noise_scale = vol_noise_scale
     else:
         noise_scale = 0.30  # Constant for both regimes
+    
+    # TASK B: AR(1) noise for temporal regime signal
+    # Select phi based on regime
+    phi = leak_phi_r0 if regime == 0 else leak_phi_r1
+    
+    if abs(phi) < 1e-8:
+        # Original i.i.d. behavior (backward compatible)
+        vol_noise = rng.normal(loc=0.0, scale=noise_scale, size=(n_paths, n_steps))
+    else:
+        # AR(1) noise with variance matching
+        # For stationary AR(1): Var(X) = σ²_innov / (1 - φ²)
+        # To match stationary variance = noise_scale², set:
+        # σ²_innov = noise_scale² * (1 - φ²)
+        sigma_innov = noise_scale * np.sqrt(max(1.0 - phi**2, 1e-8))
         
-    vol_noise = rng.normal(loc=0.0, scale=noise_scale, size=(n_paths, n_steps))
+        vol_noise = np.zeros((n_paths, n_steps))
+        # Initialize from stationary distribution
+        vol_noise[:, 0] = rng.normal(0, noise_scale, n_paths)
+        for t in range(1, n_steps):
+            innovation = rng.normal(0, sigma_innov, n_paths)
+            vol_noise[:, t] = phi * vol_noise[:, t-1] + innovation
+    
     vol_proxy = np.exp(np.log(vol_signal + 0.2) + vol_noise)  # always positive
 
     # Regime-dependent sign flip for impact lambda
@@ -174,6 +197,8 @@ def simulate_heston_signflip(
         sigma_m_1=sigma_m_1,
         m_feedback=m_feedback,
         is_conflict_set=is_conflict_set, # Global semantic inversion
+        leak_phi_r0=leak_phi_r0,
+        leak_phi_r1=leak_phi_r1,
     )
 
     return S, v, vol_proxy, lam, meta

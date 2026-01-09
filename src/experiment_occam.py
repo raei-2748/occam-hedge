@@ -45,10 +45,15 @@ def compute_hedging_losses_torch(
     action_clip: float = 5.0,
     impact_power: float = 2.0,
     R: torch.Tensor | None = None,
+    micro_lags: int = 0,
+    include_prev_action: bool = False,
 ):
     """
     Differentiable simulation of hedging with VIB.
     Updated to return per-channel information costs.
+    
+    TASK 1: Supports lagged micro signals via micro_lags parameter.
+    TASK 2: Supports previous action via include_prev_action parameter.
     """
     n_paths = S.shape[0]
     actual_steps = S.shape[1] - 1
@@ -63,12 +68,44 @@ def compute_hedging_losses_torch(
     # We'll initialize it as None and create it on the first step.
     total_kl_per_channel = None 
     
+    # TASK 1: Maintain a rolling buffer of transformed micro signals for temporal inference
+    # Buffer stores the K most recent micro signals (already transformed via micro_signal_torch)
+    micro_buffer = []  # List of (n_paths,) tensors
+    
     for t in range(actual_steps):
         S_t = S[:, t]
         tau_t = torch.full((n_paths,), tau_grid[t], device=S.device)
         
         R_t = R[:, t] if R is not None else None
-        feats = occam_features_torch(representation, S_t, tau_t, V[:, t], K, vol_hat, R_t=R_t)
+        
+        # TASK 1: Build V_history from micro buffer
+        # V_history should be (n_paths, micro_lags) with [V_{t-1}, V_{t-2}, ..., V_{t-K}]
+        if micro_lags > 0 and representation in ["micro", "combined"]:
+            if len(micro_buffer) >= micro_lags:
+                # Take the most recent micro_lags entries (reversed so t-1 is first)
+                V_history = torch.stack(micro_buffer[-micro_lags:][::-1], dim=1)
+            elif len(micro_buffer) > 0:
+                # Partial history - pad with zeros
+                available = torch.stack(micro_buffer[::-1], dim=1)  # (n_paths, len(micro_buffer))
+                padding = torch.zeros(n_paths, micro_lags - len(micro_buffer), device=S.device)
+                V_history = torch.cat([available, padding], dim=1)
+            else:
+                # No history yet - all zeros
+                V_history = None  # Will be handled by occam_features_torch
+        else:
+            V_history = None
+        
+        # TASK 2: Pass previous action for Markovity
+        a_prev = a if include_prev_action else None
+        
+        feats = occam_features_torch(
+            representation, S_t, tau_t, V[:, t], K, vol_hat, 
+            R_t=R_t, 
+            a_prev=a_prev,
+            include_prev_action=include_prev_action,
+            micro_lags=micro_lags,
+            V_history=V_history
+        )
         
         # VIB Forward
         # mus, logvars are lists of length input_dim
@@ -97,6 +134,15 @@ def compute_hedging_losses_torch(
             # Shape of mu: (B, latent_dim_per_feature)
             kld_batch = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
             total_kl_per_channel[i] += torch.mean(kld_batch) # Average over batch immediately to keep scale
+        
+        # TASK 1: Update micro buffer for next step
+        if micro_lags > 0 and representation in ["micro", "combined"]:
+            from features import micro_signal_torch
+            current_micro = micro_signal_torch(V[:, t])
+            micro_buffer.append(current_micro)
+            # Keep buffer size bounded
+            if len(micro_buffer) > micro_lags:
+                micro_buffer.pop(0)
         
         a = a_new
         
@@ -148,6 +194,10 @@ def train_model(
     n_epochs = training_config.get("n_epochs", 200)
     warmup_epochs = training_config.get("warmup_epochs", 50)
     
+    # TASK 1 & 2: Extract lag and previous action settings
+    micro_lags = training_config.get("micro_lags", 0)
+    include_prev_action = training_config.get("include_prev_action", False)
+    
     q_param = nn.Parameter(torch.tensor(float(q_init), device=S.device))
     optimizer = optim.Adam(list(model.parameters()) + [q_param], lr=lr)
     
@@ -157,7 +207,8 @@ def train_model(
         optimizer.zero_grad()
         
         losses, info_cost, info_components = compute_hedging_losses_torch(
-            model, S, V, lam, T, K, vol_hat, representation, R=R
+            model, S, V, lam, T, K, vol_hat, representation, 
+            R=R, micro_lags=micro_lags, include_prev_action=include_prev_action
         )
         
         # Apply hierarchical or uniform information penalty
@@ -220,10 +271,14 @@ def hedge_on_paths(
     S, V, lam, T, K, vol_hat, representation, 
     weights_or_state_dict, 
     action_clip=5.0,
-    R=None
+    R=None,
+    micro_lags=0,
+    include_prev_action=False,
 ):
     """
     Evaluates policy on path using Torch model (CPU/GPU) for consistency with VIB.
+    
+    TASK 1 & 2: Supports lagged micro signals and previous action.
     """
     # Setup Torch environment
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -231,8 +286,8 @@ def hedge_on_paths(
     V_t = torch.tensor(V, dtype=torch.float32, device=device)
     lam_t = torch.tensor(lam, dtype=torch.float32, device=device)
     
-    # Reconstruct Model
-    input_dim = get_feature_dim(representation)
+    # Reconstruct Model with correct input dimension accounting for lags
+    input_dim = get_feature_dim(representation, include_prev_action=include_prev_action, micro_lags=micro_lags)
         
     # Note: latent_dim must match training. User request = 8.
     model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=8).to(device)
@@ -247,7 +302,8 @@ def hedge_on_paths(
     
     with torch.no_grad():
         losses_t, info_cost_t, _ = compute_hedging_losses_torch(
-            model, S_t, V_t, lam_t, T, K, vol_hat, representation, action_clip, R=R
+            model, S_t, V_t, lam_t, T, K, vol_hat, representation, action_clip, 
+            R=R, micro_lags=micro_lags, include_prev_action=include_prev_action
         )
         # Quick loop for metrics (using model)
         # We need to flatten both V and da (absolute changes) for wrong-way score
@@ -297,11 +353,19 @@ def hedge_on_paths(
 def train_weights(
     S, V, lam, T, K, vol_hat, representation, beta, train_eta, train_lambdas, gamma,
     R=None,
+    micro_lags=0,
+    include_prev_action=False,
     **kwargs
 ):
+    """
+    Convenience function to train a VIB policy.
+    
+    TASK 1 & 2: Supports lagged micro signals and previous action.
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    input_dim = get_feature_dim(representation)
+    # Get correct input dimension accounting for lags and prev action
+    input_dim = get_feature_dim(representation, include_prev_action=include_prev_action, micro_lags=micro_lags)
     
     model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=8).to(device)
     
@@ -312,7 +376,9 @@ def train_weights(
         "gamma": gamma,
         "lr": 0.001,
         "n_epochs": 150, 
-        "warmup_epochs": 50
+        "warmup_epochs": 50,
+        "micro_lags": micro_lags,
+        "include_prev_action": include_prev_action,
     }
     cfg.update(kwargs)
     

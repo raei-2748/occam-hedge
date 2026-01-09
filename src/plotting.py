@@ -70,7 +70,8 @@ def plot_robust_risk_vs_eta(curves_data: list, out_path: Path, use_bands=False):
         print("No data for robustness curves plot.")
         return
     
-    fig, axes = plt.subplots(1, len(reps), figsize=(4 * len(reps), 4), sharey=True)
+    fig, axes = plt.subplots(1, len(reps), figsize=(4 * len(reps), 4), sharey=True, squeeze=False)
+    axes = axes.flatten()
         
     for i, rep in enumerate(reps):
         ax = axes[i]
@@ -221,10 +222,11 @@ def plot_turnover_concentration(diag_data: list, out_path: Path):
     if len(reps) == 0:
         print("No data for turnover concentration plot.")
         return
-    fig, axes = plt.subplots(1, len(reps), figsize=(4*len(reps), 4), sharey=True)
+    fig, axes = plt.subplots(1, len(reps), figsize=(4*len(reps), 4), sharey=True, squeeze=False)
+    axes = axes.flatten()
     
     for i, rep in enumerate(reps):
-        ax = axes[i] if len(reps) > 1 else axes[0]
+        ax = axes[i]
         subset = df_plot[df_plot["representation"] == rep]
         
         # Plot line for each beta
