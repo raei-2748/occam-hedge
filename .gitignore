@@ -17,6 +17,7 @@ archive/
 *.csv
 *.png
 *.json
+!configs/*.json
 *.log
 !paper_frontier.csv # Keep final results csv
 !figures/fig_*.png # Keep paper figures

@@ -58,6 +58,14 @@ def main():
     parser.add_argument("--leak_phi_r1", type=float, default=0.0,
                         help="AR(1) coefficient for regime 1 noise")
     
+    # Shifted eval phi (for robustness testing)
+    parser.add_argument("--shifted_phi_r1", type=float, default=0.8,
+                        help="Shifted AR(1) coefficient for robustness testing (default: 0.8)")
+    
+    # Eval balanced regimes
+    parser.add_argument("--eval_balanced_regimes", action="store_true", default=True,
+                        help="Use 50/50 regime balance for evaluation (default: True)")
+    
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -190,12 +198,42 @@ def main():
             leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
         )
         
+        # TASK 4: Generate eval data under BROKEN leak (φ=0 for both regimes)
+        # This tests if model relies on temporal signal
+        S_eval_broken, _, V_eval_broken, lam_eval_broken, _ = simulate_heston_signflip(
+            regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed,
+            vol_noise_scale=0.30,
+            leak_phi_r0=0.0, leak_phi_r1=0.0  # Broken: no temporal signal
+        )
+        
+        # TASK 4: Generate eval data under SHIFTED leak (φ increased)
+        # This tests robustness to distribution shift
+        S_eval_shifted, _, V_eval_shifted, lam_eval_shifted, _ = simulate_heston_signflip(
+            regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed,
+            vol_noise_scale=0.30,
+            leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.shifted_phi_r1  # Shifted: stronger temporal signal
+        )
+        
         # 2b. Semantic Flip Check (Regime 0 vs Regime 1)
-        # Generate a small Regime 1 batch for correlation check and stress testing
+        # Generate Regime 1 batch for correlation check and stress testing (MATCHED leak)
         S_stress, _, V_stress, lam_stress, _ = simulate_heston_signflip(
             regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
             vol_noise_scale=0.30,
             leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
+        )
+        
+        # Regime 1 under BROKEN leak (for robustness comparison)
+        S_stress_broken, _, V_stress_broken, lam_stress_broken, _ = simulate_heston_signflip(
+            regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
+            vol_noise_scale=0.30,
+            leak_phi_r0=0.0, leak_phi_r1=0.0
+        )
+        
+        # Regime 1 under SHIFTED leak
+        S_stress_shifted, _, V_stress_shifted, lam_stress_shifted, _ = simulate_heston_signflip(
+            regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
+            vol_noise_scale=0.30,
+            leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.shifted_phi_r1
         )
         
         # Calculate correlations (Volume vs Lambda)
@@ -246,7 +284,7 @@ def main():
                 ckpt_dir.mkdir(parents=True, exist_ok=True)
                 torch.save(w, ckpt_dir / "model_weights.pt")
                 
-                # Eval on Regime 0
+                # Eval on Regime 0 (MATCHED)
                 losses, info_cost, turnover, exec_cost, da_vol_corr_0 = hedge_on_paths(
                     S_eval, V_eval, lam_eval, T, K, vol_hat, rep, w,
                     micro_lags=args.micro_lags, include_prev_action=args.include_prev_action
@@ -269,7 +307,7 @@ def main():
                     "turnover": diag_metrics["turnover"].tolist()
                 })
 
-                # Eval on Regime 1 (Stress) for Wrong-Way Score
+                # Eval on Regime 1 (Stress - MATCHED) for Wrong-Way Score
                 losses1, info_cost1, turnover1, exec_cost1, da_vol_corr_1 = hedge_on_paths(
                     S_stress, V_stress, lam_stress, T, K, vol_hat, rep, w,
                     micro_lags=args.micro_lags, include_prev_action=args.include_prev_action
@@ -280,12 +318,33 @@ def main():
                 # W = Correlation. (Positive = Bad/Wrong Way for Regime 1)
                 wrong_way_1 = da_vol_corr_1
                 
+                # ============ TASK 4: ROBUSTNESS EVAL ============
+                # Eval on Regime 1 under BROKEN leak (φ=0)
+                losses1_broken, _, _, _, _ = hedge_on_paths(
+                    S_stress_broken, V_stress_broken, lam_stress_broken, T, K, vol_hat, rep, w,
+                    micro_lags=args.micro_lags, include_prev_action=args.include_prev_action
+                )
+                
+                # Eval on Regime 1 under SHIFTED leak (φ increased)
+                losses1_shifted, _, _, _, _ = hedge_on_paths(
+                    S_stress_shifted, V_stress_shifted, lam_stress_shifted, T, K, vol_hat, rep, w,
+                    micro_lags=args.micro_lags, include_prev_action=args.include_prev_action
+                )
+                
                 # Calculate metrics for Frontier
                 r0 = robust_es_kl(losses, eta=0.0, gamma=gamma)
                 r_stress_frontier = robust_es_kl(losses, eta=stress_eta_frontier, gamma=gamma)
                 
+                # NEW: R1 metrics under different leak conditions
+                r1_matched = robust_es_kl(losses1, eta=0.0, gamma=gamma)
+                r1_broken = robust_es_kl(losses1_broken, eta=0.0, gamma=gamma)
+                r1_shifted = robust_es_kl(losses1_shifted, eta=0.0, gamma=gamma)
+                
                 # Calculate metrics for Curves (all etas)
                 r_curve_vals = [robust_es_kl(losses, eta=e, gamma=gamma) for e in eta_grid_curves]
+                
+                # Compute combined wrong-way score for mechanism closure
+                wrong_way_score = (wrong_way_0 + wrong_way_1) / 2.0
                 
                 record = {
                     "seed_idx": seed_idx,
@@ -300,6 +359,11 @@ def main():
                     "R_eta_curve": [float(r) for r in r_curve_vals], # List matching eta_grid
                     "wrong_way_0": float(wrong_way_0),
                     "wrong_way_1": float(wrong_way_1),
+                    # NEW: Robustness metrics for mechanism closure
+                    "R1": float(r1_matched),
+                    "R1_leak_broken": float(r1_broken),
+                    "R1_leak_shifted": float(r1_shifted),
+                    "wrong_way_score": float(wrong_way_score),
                     "model_fingerprint": fp
                 }
                 all_raw_results.append(record)
@@ -338,7 +402,9 @@ def main():
     frontier_df = df[df["beta"].isin(beta_grid_raw)].copy()
     
     # Group by Rep, Beta -> Mean/Std
-    agg_cols = ["R0", "R_stress_eta0p1", "info_cost", "turnover", "exec_cost", "wrong_way_0", "wrong_way_1"]
+    # NEW: Include robustness metrics for mechanism closure
+    agg_cols = ["R0", "R_stress_eta0p1", "info_cost", "turnover", "exec_cost", 
+                "wrong_way_0", "wrong_way_1", "R1", "R1_leak_broken", "R1_leak_shifted", "wrong_way_score"]
     frontier_agg = frontier_df.groupby(["representation", "beta"])[agg_cols].agg(["mean", "std"]).reset_index()
     
     # Flatten columns
@@ -351,6 +417,11 @@ def main():
     frontier_agg.rename(columns=rename_map, inplace=True)
     
     frontier_agg.to_csv(run_dir / "paper_frontier.csv", index=False)
+    
+    # NEW: Also save to results/ for plot_mechanism_closure.py
+    results_dir = ROOT / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    frontier_agg.to_csv(results_dir / "sweep_results.csv", index=False)
     
     # 3b. Robust Curves Data (Aggregation)
     # Filter for betas in beta_grid_curves

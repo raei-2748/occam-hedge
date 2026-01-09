@@ -1,0 +1,50 @@
+{
+    "run_name": "paper_leaky",
+    "seed_train": 0,
+    "seed_eval": 777,
+    "n_steps": 30,
+    "T": 0.12,
+    "K": 100.0,
+    "vol_hat": 0.2,
+    "gamma": 0.95,
+    "eta_grid": [
+        0.0,
+        0.05,
+        0.1
+    ],
+    "eta_grid_compare": [
+        0.0,
+        0.05,
+        0.1
+    ],
+    "train_eta": 0.05,
+    "train_lambdas": [
+        0.01,
+        0.1,
+        1.0
+    ],
+    "n_paths_train": 1500,
+    "n_paths_eval": 2000,
+    "n_paths_compare": 3000,
+    "beta_grid": [
+        0.0,
+        0.01,
+        0.1,
+        1.0
+    ],
+    "beta_grid_curves": [
+        0.0,
+        0.1
+    ],
+    "representations": [
+        "combined"
+    ],
+    "stress_eta": 0.1,
+    "n_epochs": 100,
+    "warmup_epochs": 30,
+    "_comment_mechanism": "MECHANISM FIX: Settings below trigger competence trap",
+    "_comment_micro_lags": "micro_lags=4 gives agent access to temporal history",
+    "_comment_leak": "leak_phi_r1=0.6 creates detectable AR(1) signal in regime 1",
+    "_comment_regime_mix": "regime_mix_p=0.8 means training dominated by R0, so agent exploits R1 leak when it appears",
+    "_comment_expected": "At beta=0: AUC(Z) > 0.55. As beta increases: AUC(Z) decreases, robustness increases"
+}

@@ -320,20 +320,57 @@ def hedge_on_paths(
         da_list = []
         V_list = []
 
-        for t in range(n_steps):
-            R_t = R[:, t] if R is not None else None
-            feats = occam_features_torch(representation, S_t[:, t], torch.full((n_paths,), tau_grid[t], device=device), V_t[:, t], K, vol_hat, R_t=R_t)
-            action, _, _ = model(feats) 
-            a_new = torch.clamp(action, -action_clip, action_clip)
-            da = a_new - a
+ # ... inside hedge_on_paths ...
+    
+    # Initialize state for the metrics loop
+    micro_buffer = []
+    a = torch.zeros(n_paths, device=device) # Reset action for the loop
+    
+    for t in range(n_steps):
+        R_t = R[:, t] if R is not None else None
+        
+        # --- FIX START: Reconstruct History & Prev Action ---
+        # 1. Build V_history
+        if micro_lags > 0 and representation in ["micro", "combined"]:
+            if len(micro_buffer) >= micro_lags:
+                V_history = torch.stack(micro_buffer[-micro_lags:][::-1], dim=1)
+            elif len(micro_buffer) > 0:
+                available = torch.stack(micro_buffer[::-1], dim=1)
+                padding = torch.zeros(n_paths, micro_lags - len(micro_buffer), device=device)
+                V_history = torch.cat([available, padding], dim=1)
+            else:
+                V_history = None
+        else:
+            V_history = None
             
-            path_cost += 0.5 * lam_t[:, t] * da**2
-            path_turnover += torch.abs(da)
-            
-            da_list.append(da)
-            V_list.append(V_t[:, t])
-            
-            a = a_new
+        # 2. Prepare Previous Action
+        a_prev = a if include_prev_action else None
+        
+        # 3. Correct Function Call
+        feats = occam_features_torch(
+            representation, 
+            S_t[:, t], 
+            torch.full((n_paths,), tau_grid[t], device=device), 
+            V_t[:, t], 
+            K, 
+            vol_hat, 
+            R_t=R_t,
+            micro_lags=micro_lags,           # Pass new arg
+            include_prev_action=include_prev_action, # Pass new arg
+            V_history=V_history,             # Pass history
+            a_prev=a_prev                    # Pass prev action
+        )
+        
+        # 4. Update Buffer
+        if micro_lags > 0 and representation in ["micro", "combined"]:
+            from features import micro_signal_torch
+            current_micro = micro_signal_torch(V_t[:, t])
+            micro_buffer.append(current_micro)
+            if len(micro_buffer) > micro_lags:
+                micro_buffer.pop(0)
+        # --- FIX END ---
+
+        action, _, _ = model(feats) 
             
         turnover_rate = torch.mean(path_turnover) / n_steps
         exec_cost = torch.mean(path_cost) / n_steps
