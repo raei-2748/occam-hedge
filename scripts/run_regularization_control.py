@@ -193,7 +193,10 @@ def train_model_with_l2(
         loss_obj.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-    
+        
+        if epoch % 10 == 0:
+            print(f"    Epoch {epoch}/{n_epochs} | Loss: {loss_obj.item():.4f} | L2 Penalty: {l2_penalty:.6f} | q: {q_param.item():.4f}", flush=True)
+            
     return {"final_weights": model.state_dict()}
 
 
@@ -206,11 +209,11 @@ def main():
     cfg = {
         "representation": "combined",
         "gamma": 0.95,
-        "n_steps": 30,
-        "T": 30/252,
+        "n_steps": 100,  # ✅ FIXED: Match paper_run.json
+        "T": 1.0,  # ✅ FIXED: Match paper_run.json (was 30/252)
         "K": 100.0,
         "vol_hat": 0.2,
-        "n_paths_train": 5000,
+        "n_paths_train": 2500,
         "n_paths_eval": 2000,
         "train_eta": 0.0,
         "stress_eta": 0.1,
@@ -249,7 +252,7 @@ def main():
         print(f"{'='*70}")
         
         # ===== Generate Mixed-Regime Training Data =====
-        print("\n[1/5] Generating mixed-regime training data...")
+        print("\n[1/5] Generating mixed-regime training data...", flush=True)
         set_seeds(base_seed)
         n_half = cfg["n_paths_train"] // 2
         
@@ -276,7 +279,7 @@ def main():
         lam_t = torch.tensor(lam_train, dtype=torch.float32, device=device)
         
         # ===== Generate Evaluation Data =====
-        print("[2/5] Generating evaluation data (matched, broken, shifted)...")
+        print("[2/5] Generating evaluation data (matched, broken, shifted)...", flush=True)
         set_seeds(eval_seed)
         
         # Matched (same leak as training)
@@ -307,7 +310,7 @@ def main():
         )
         
         # ===== VIB Baseline (β=0) =====
-        print("\n[3/5] Training VIB baseline (β=0)...")
+        print("\n[3/5] Training VIB baseline (β=0)...", flush=True)
         model_vib = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=8).to(device)
         
         training_config = {
@@ -338,19 +341,19 @@ def main():
         
         losses_vib_r1_m, _, turnover_vib_r1_m, _, corr_vib_r1_m = hedge_on_paths(
             S_eval1_m, V_eval1_m, lam_eval1_m, cfg["T"], cfg["K"], cfg["vol_hat"],
-            cfg["representation"], w_vib
+            cfg["representation"], w_vib, micro_lags=cfg["micro_lags"]  # ✅ FIXED: Added micro_lags
         )
         r1_vib_m = robust_es_kl(losses_vib_r1_m, eta=cfg["stress_eta"], gamma=cfg["gamma"])
         
         losses_vib_r1_b, _, _, _, _ = hedge_on_paths(
             S_eval1_b, V_eval1_b, lam_eval1_b, cfg["T"], cfg["K"], cfg["vol_hat"],
-            cfg["representation"], w_vib
+            cfg["representation"], w_vib, micro_lags=cfg["micro_lags"]  # ✅ FIXED: Added micro_lags
         )
         r1_vib_b = robust_es_kl(losses_vib_r1_b, eta=cfg["stress_eta"], gamma=cfg["gamma"])
         
         losses_vib_r1_s, _, _, _, _ = hedge_on_paths(
             S_eval1_s, V_eval1_s, lam_eval1_s, cfg["T"], cfg["K"], cfg["vol_hat"],
-            cfg["representation"], w_vib
+            cfg["representation"], w_vib, micro_lags=cfg["micro_lags"]  # ✅ FIXED: Added micro_lags
         )
         r1_vib_s = robust_es_kl(losses_vib_r1_s, eta=cfg["stress_eta"], gamma=cfg["gamma"])
         
@@ -380,8 +383,13 @@ def main():
         
         print(f"  VIB: R0={r0_vib:.3f}, R1_m={r1_vib_m:.3f}, R1_b={r1_vib_b:.3f}, Probe={probe_vib:.3f}")
         
+        # Clean up VIB model to free GPU memory
+        del model_vib
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         # ===== L2 Control Sweep =====
-        print("\n[4/5] Training L2 weight decay control...")
+        print(f"\n[4/5] Training L2 models (grid size: {len(l2_grid)})...", flush=True)
         for l2_lambda in l2_grid:
             print(f"\n  L2 λ={l2_lambda}...")
             
@@ -397,25 +405,25 @@ def main():
             # Evaluate L2 model
             losses_l2_r0, info_l2, turnover_l2_r0, _, corr_l2_r0 = hedge_on_paths(
                 S_eval0_m, V_eval0_m, lam_eval0_m, cfg["T"], cfg["K"], cfg["vol_hat"],
-                cfg["representation"], w_l2
+                cfg["representation"], w_l2, micro_lags=cfg["micro_lags"]  # ✅ FIXED: Added micro_lags
             )
             r0_l2 = robust_es_kl(losses_l2_r0, eta=0.0, gamma=cfg["gamma"])
             
             losses_l2_r1_m, _, turnover_l2_r1_m, _, corr_l2_r1_m = hedge_on_paths(
                 S_eval1_m, V_eval1_m, lam_eval1_m, cfg["T"], cfg["K"], cfg["vol_hat"],
-                cfg["representation"], w_l2
+                cfg["representation"], w_l2, micro_lags=cfg["micro_lags"]  # ✅ FIXED: Added micro_lags
             )
             r1_l2_m = robust_es_kl(losses_l2_r1_m, eta=cfg["stress_eta"], gamma=cfg["gamma"])
             
             losses_l2_r1_b, _, _, _, _ = hedge_on_paths(
                 S_eval1_b, V_eval1_b, lam_eval1_b, cfg["T"], cfg["K"], cfg["vol_hat"],
-                cfg["representation"], w_l2
+                cfg["representation"], w_l2, micro_lags=cfg["micro_lags"]  # ✅ FIXED: Added micro_lags
             )
             r1_l2_b = robust_es_kl(losses_l2_r1_b, eta=cfg["stress_eta"], gamma=cfg["gamma"])
             
             losses_l2_r1_s, _, _, _, _ = hedge_on_paths(
                 S_eval1_s, V_eval1_s, lam_eval1_s, cfg["T"], cfg["K"], cfg["vol_hat"],
-                cfg["representation"], w_l2
+                cfg["representation"], w_l2, micro_lags=cfg["micro_lags"]  # ✅ FIXED: Added micro_lags
             )
             r1_l2_s = robust_es_kl(losses_l2_r1_s, eta=cfg["stress_eta"], gamma=cfg["gamma"])
             
@@ -444,6 +452,24 @@ def main():
             all_results.append(record)
             
             print(f"    R0={r0_l2:.3f}, R1_m={r1_l2_m:.3f}, R1_b={r1_l2_b:.3f}, Probe={probe_l2:.3f}")
+            
+            # Clean up L2 model to free GPU memory
+            del model_l2
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        
+        # End of seed: clean up all tensors
+        del S_t, V_t, lam_t
+        del S_eval0_m, V_eval0_m, lam_eval0_m
+        del S_eval1_m, V_eval1_m, lam_eval1_m
+        del S_eval1_b, V_eval1_b, lam_eval1_b
+        del S_eval1_s, V_eval1_s, lam_eval1_s
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        import gc
+        gc.collect()
+        print(f"\n✅ Seed {seed_idx + 1} complete. Memory cleaned.\n")
     
     # ===== Aggregate Results =====
     print(f"\n[5/5] Aggregating results across {cfg['n_seeds']} seeds...")

@@ -1,4 +1,25 @@
+"""
+Training and evaluation loops for Occam's Hedge with Variational Information Bottleneck (VIB).
 
+This module implements the core experimental framework for training hedging policies under
+information constraints, as described in "Occam's Hedge under Relative Entropy Uncertainty."
+
+Key Components:
+    - compute_hedging_losses_torch(): Differentiable hedging simulation with VIB encoder
+    - train_model(): Training loop with hierarchical information penalties (Eq. 3.14 in paper)
+    - hedge_on_paths(): Policy evaluation on test paths
+    - train_weights(): Convenience wrapper for VIB policy training
+
+The VIB framework implements hierarchical information regularization (Section 3.4):
+    - Payoff-anchored channels (Greeks) receive low β penalties
+    - Equilibrium-derived channels (microstructure) receive high β penalties
+    - Enables rational shedding of regime-contingent logic under information constraints
+
+Paper References:
+    - Section 3.4: Occam's Hedge as Information-Constrained Stochastic Control
+    - Equation 3.14: Training objective with hierarchical β penalties
+    - Section 4.6: Training protocol and baselines
+"""
 import json
 import time
 import shutil
@@ -47,13 +68,12 @@ def compute_hedging_losses_torch(
     R: torch.Tensor | None = None,
     micro_lags: int = 0,
     include_prev_action: bool = False,
+    v_paths: torch.Tensor | None = None,
+    adaptive_beta_gamma: float = 0.0
 ):
     """
     Differentiable simulation of hedging with VIB.
     Updated to return per-channel information costs.
-    
-    TASK 1: Supports lagged micro signals via micro_lags parameter.
-    TASK 2: Supports previous action via include_prev_action parameter.
     """
     n_paths = S.shape[0]
     actual_steps = S.shape[1] - 1
@@ -68,7 +88,7 @@ def compute_hedging_losses_torch(
     # We'll initialize it as None and create it on the first step.
     total_kl_per_channel = None 
     
-    # TASK 1: Maintain a rolling buffer of transformed micro signals for temporal inference
+    # Maintain a rolling buffer of transformed micro signals for temporal inference
     # Buffer stores the K most recent micro signals (already transformed via micro_signal_torch)
     micro_buffer = []  # List of (n_paths,) tensors
     
@@ -78,7 +98,7 @@ def compute_hedging_losses_torch(
         
         R_t = R[:, t] if R is not None else None
         
-        # TASK 1: Build V_history from micro buffer
+        # Build V_history from micro buffer
         # V_history should be (n_paths, micro_lags) with [V_{t-1}, V_{t-2}, ..., V_{t-K}]
         if micro_lags > 0 and representation in ["micro", "combined"]:
             if len(micro_buffer) >= micro_lags:
@@ -95,7 +115,7 @@ def compute_hedging_losses_torch(
         else:
             V_history = None
         
-        # TASK 2: Pass previous action for Markovity
+        # Pass previous action for Markovity
         a_prev = a if include_prev_action else None
         
         feats = occam_features_torch(
@@ -129,13 +149,22 @@ def compute_hedging_losses_torch(
         
         # Analytic KL Divergence Loss per channel
         # KL(N(mu, sigma) || N(0, 1)) = 0.5 * sum(sigma^2 + mu^2 - 1 - log(sigma^2))
+        
+        # Adaptive Beta Scaling: KL_t = KL_t * (1 + gamma * inst_vol_t)
+        if v_paths is not None and adaptive_beta_gamma > 0.0:
+            # v_paths is variance, so vol = sqrt(v)
+            beta_scale = 1.0 + adaptive_beta_gamma * torch.sqrt(torch.clamp(v_paths[:, t], min=1e-8))
+        else:
+            beta_scale = 1.0
+
         for i, (mu, logvar) in enumerate(zip(mus, logvars)):
             # Sum over batch dimension, we will average later
             # Shape of mu: (B, latent_dim_per_feature)
             kld_batch = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-            total_kl_per_channel[i] += torch.mean(kld_batch) # Average over batch immediately to keep scale
+            # Apply adaptive scale
+            total_kl_per_channel[i] += torch.mean(kld_batch * beta_scale) 
         
-        # TASK 1: Update micro buffer for next step
+        # Update micro buffer for next step
         if micro_lags > 0 and representation in ["micro", "combined"]:
             from features import micro_signal_torch
             current_micro = micro_signal_torch(V[:, t])
@@ -172,12 +201,19 @@ def train_model(
     vol_hat: float,
     q_init: float = 0.0,
     R: torch.Tensor | None = None,
+    v_paths: torch.Tensor | None = None
 ) -> dict:
     
     beta = training_config["beta"]
     train_eta = training_config["train_eta"]
     train_lambdas = torch.tensor(training_config["train_lambdas"], device=S.device, dtype=torch.float32)
     gamma = training_config["gamma"]
+    
+    # Adaptive Beta Sensitivity
+    adaptive_beta_gamma = training_config.get("adaptive_beta_gamma", 0.0)
+    
+    warmup_epochs = training_config.get("warmup_epochs", 0)
+    hierarchical = training_config.get("hierarchical", False)
     
     # Parse beta parameter: can be float (uniform) or dict (hierarchical)
     if isinstance(beta, dict):
@@ -194,7 +230,7 @@ def train_model(
     n_epochs = training_config.get("n_epochs", 200)
     warmup_epochs = training_config.get("warmup_epochs", 50)
     
-    # TASK 1 & 2: Extract lag and previous action settings
+    # Extract lag and previous action settings
     micro_lags = training_config.get("micro_lags", 0)
     include_prev_action = training_config.get("include_prev_action", False)
     
@@ -208,7 +244,8 @@ def train_model(
         
         losses, info_cost, info_components = compute_hedging_losses_torch(
             model, S, V, lam, T, K, vol_hat, representation, 
-            R=R, micro_lags=micro_lags, include_prev_action=include_prev_action
+            R=R, micro_lags=micro_lags, include_prev_action=include_prev_action,
+            v_paths=v_paths, adaptive_beta_gamma=adaptive_beta_gamma
         )
         
         # Apply hierarchical or uniform information penalty
@@ -261,6 +298,9 @@ def train_model(
             
             history.append(log_entry)
             
+            # Add verbosity (flushed for real-time visibility)
+            print(f"Epoch {epoch}/{n_epochs} | Loss: {loss_obj.item():.4f} | Info: {info_cost.item():.4f} | q: {q_param.item():.4f}", flush=True)
+            
     return {
         "final_weights": model.state_dict(),
         "final_q": q_param.item(),
@@ -277,8 +317,6 @@ def hedge_on_paths(
 ):
     """
     Evaluates policy on path using Torch model (CPU/GPU) for consistency with VIB.
-    
-    TASK 1 & 2: Supports lagged micro signals and previous action.
     """
     # Setup Torch environment
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -371,6 +409,12 @@ def hedge_on_paths(
         # --- FIX END ---
 
         action, _, _ = model(feats) 
+        a_new = torch.clamp(action, -action_clip, action_clip)
+        da = a_new - a
+        da_list.append(da)
+        V_list.append(V_t[:, t])
+        
+        a = a_new 
             
         turnover_rate = torch.mean(path_turnover) / n_steps
         exec_cost = torch.mean(path_cost) / n_steps
@@ -392,12 +436,11 @@ def train_weights(
     R=None,
     micro_lags=0,
     include_prev_action=False,
+    v_paths=None,
     **kwargs
 ):
     """
     Convenience function to train a VIB policy.
-    
-    TASK 1 & 2: Supports lagged micro signals and previous action.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -423,7 +466,12 @@ def train_weights(
     V_t = torch.tensor(V, dtype=torch.float32, device=device)
     lam_t = torch.tensor(lam, dtype=torch.float32, device=device)
     
-    res = train_model(model, S_t, V_t, lam_t, cfg, representation, T, K, vol_hat, R=R)
+    if v_paths is not None:
+        v_paths_t = torch.tensor(v_paths, dtype=torch.float32, device=device)
+    else:
+        v_paths_t = None
+    
+    res = train_model(model, S_t, V_t, lam_t, cfg, representation, T, K, vol_hat, R=R, v_paths=v_paths_t)
     return res["final_weights"]
 
 def main():

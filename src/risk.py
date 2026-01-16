@@ -1,5 +1,25 @@
+"""
+Risk measures for hedging policy evaluation.
+
+This module implements Expected Shortfall (ES / CVaR) and robust risk measures
+used for training and evaluating hedging policies, as described in Section 3.3.
+
+Key Functions:
+    - robust_es_kl(): Rockafellar-Uryasev CVaR implementation (Eq. 3.8)
+    - es_loss_torch(): PyTorch version for differentiable optimization
+    - robust_risk_torch(): Robust aggregation over stress scenarios
+
+Expected Shortfall (Section 3.3):
+    We use CVaR_γ(Y) = ES_{0.95}(Y) as the tail risk measure. The Rockafellar-Uryasev
+    formulation provides a convex, differentiable objective for gradient-based training.
+
+Paper References:
+    - Section 3.3: Hedging error and risk measures  
+    - Equation 3.8: CVaR formulation
+"""
 import numpy as np
 import math
+
 
 
 def logsumexp(x: np.ndarray) -> float:

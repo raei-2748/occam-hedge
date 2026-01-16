@@ -1,4 +1,24 @@
+"""
+Policy architectures for hedging under information constraints.
 
+This module implements the VIB (Variational Information Bottleneck) policy architecture
+used in Occam's Hedge, as described in Section 3.4 of the paper.
+
+Key Components:
+    - VariationalEncoder: Gaussian encoder q_φ(z|x) with reparameterization trick
+    - FactorizedVariationalPolicy: Per-feature encoding for hierarchical β penalties
+    - Baseline delta hedging policies for comparison
+
+Factorized Architecture (Section 4.7):
+    The policy uses independent encoders for each input feature, enabling differential
+    information penalties across channels (Greek vs. microstructure). This implements
+    the hierarchical information regularization described in Eq. 3.14.
+
+Paper References:
+    - Section 3.4: Occam's Hedge as information-constrained stochastic control
+    - Section 4.5: Neural network architecture
+    - Section 4.7: Hierarchical penalty implementation
+"""
 from __future__ import annotations
 import numpy as np
 import math

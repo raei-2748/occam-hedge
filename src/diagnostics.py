@@ -10,6 +10,7 @@ from experiment_occam import bs_delta_call_torch, occam_features_torch
 # Or just re-import from experiment_occam.
 
 from experiment_occam import occam_features_torch
+from features import get_feature_dim
 
 def evaluate_path_diagnostics(
     S: np.ndarray,
@@ -20,6 +21,8 @@ def evaluate_path_diagnostics(
     vol_hat: float,
     representation: str,
     weights_or_state_dict: dict,
+    micro_lags: int = 0,
+    include_prev_action: bool = False
 ) -> dict:
     """
     Evaluates policy and returns path-level diagnostics (Mean Volume, Total Turnover, Total Cost).
@@ -31,7 +34,7 @@ def evaluate_path_diagnostics(
     lam_t = torch.tensor(lam, dtype=torch.float32, device=device)
     
     # Reconstruct Model
-    input_dim = 2 if representation == "combined" else 1
+    input_dim = get_feature_dim(representation, include_prev_action=include_prev_action, micro_lags=micro_lags)
     model = FactorizedVariationalPolicy(input_dim, latent_dim_per_feature=8).to(device)
     model.load_state_dict(weights_or_state_dict)
     model.eval()
@@ -44,17 +47,48 @@ def evaluate_path_diagnostics(
     path_turnover = torch.zeros(n_paths, device=device)
     path_cost = torch.zeros(n_paths, device=device)
     
+    # Initialize micro buffer for lags
+    micro_buffer = []
+
     with torch.no_grad():
         for t in range(n_steps):
+            # Prepare V_history
+            if micro_lags > 0 and representation in ["micro", "combined"]:
+                if len(micro_buffer) >= micro_lags:
+                    V_history = torch.stack(micro_buffer[-micro_lags:][::-1], dim=1)
+                elif len(micro_buffer) > 0:
+                     available = torch.stack(micro_buffer[::-1], dim=1)
+                     padding = torch.zeros(n_paths, micro_lags - len(micro_buffer), device=device)
+                     V_history = torch.cat([available, padding], dim=1)
+                else:
+                    V_history = None
+            else:
+                 V_history = None
+            
+            # Prepare prev action
+            a_prev = a if include_prev_action else None
+
             feats = occam_features_torch(
                 representation, 
                 S_t[:, t], 
                 torch.full((n_paths,), tau_grid[t], device=device), 
                 V_t[:, t], 
                 K, 
-                vol_hat
+                vol_hat,
+                micro_lags=micro_lags,
+                include_prev_action=include_prev_action,
+                V_history=V_history,
+                a_prev=a_prev
             )
             
+            # Update Buffer
+            if micro_lags > 0 and representation in ["micro", "combined"]:
+                from features import micro_signal_torch
+                current_micro = micro_signal_torch(V_t[:, t])
+                micro_buffer.append(current_micro)
+                if len(micro_buffer) > micro_lags:
+                    micro_buffer.pop(0)
+
             # For diagnostics, we look at the mean action (deterministic) or sample?
             # Usually deterministic (mu) for analysis.
             # But the model returns (action, mus, logvars). 

@@ -1,0 +1,17 @@
+
+============================================================
+VALIDATION: Oracle Disambiguation Test
+============================================================
+ Generating mixed regime data...
+ Dataset shape: (10000, 101)
+ Training Oracle Policy (beta=0.0, 100 epochs)...
+ Evaluating on Regime 0...
+ Evaluating on Regime 1...
+
+ Oracle Results:
+   R0 (Regime 0): 0.2517
+   R1 (Regime 1): 0.2433
+   Degradation:   0.97
+
+ Saved results to: /Users/ray/Downloads/Documents/occam-hedge/results/oracle_test_results.json
+ Result: ✅ SUCCESS

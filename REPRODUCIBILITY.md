@@ -13,6 +13,15 @@ python scripts/run_paper.py \
   --regime_mix_p 0.8
 ```
 
+Reproduce the "Fortress Appendix" robustness results (Adversarial Simulator + Adaptive Beta):
+```bash
+python scripts/run_paper.py \
+  --seeds 3 \
+  --simulation_mode adversarial \
+  --jump_intensity 0.1 \
+  --adaptive_beta_gamma 0.5
+```
+
 Then generate the mechanism closure plot:
 ```bash
 python scripts/plot_mechanism_closure.py

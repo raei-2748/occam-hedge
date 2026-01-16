@@ -7,9 +7,6 @@ def get_feature_dim(representation: str, include_prev_action: bool = False, micr
     """
     Returns the input dimension for a given representation.
     
-    TASK E: Optionally includes previous action a_{t-1} in observation.
-    TASK 1: Optionally includes lagged micro signals for temporal regime inference.
-    
     Args:
         representation: Feature set to use ('greeks', 'micro', 'combined', 'oracle')
         include_prev_action: Whether to append previous action a_{t-1}
@@ -60,9 +57,6 @@ def occam_features_torch(
     """
     Construct observation vector for policy.
     
-    TASK E: Optionally appends previous action a_{t-1} for observation consistency.
-    TASK 1: Optionally appends lagged micro signals for temporal regime inference.
-    
     Args:
         representation: Feature set to use
         S_t: Current stock price (B,)
@@ -98,7 +92,7 @@ def occam_features_torch(
     else:
         raise ValueError(f"Unknown representation: {representation}")
     
-    # TASK 1: Append lagged micro signals for temporal regime inference
+    # Append lagged micro signals for temporal regime inference
     # V_history should be (B, micro_lags) with already-transformed micro signals
     if micro_lags > 0 and representation in ["micro", "combined"]:
         if V_history is not None:
@@ -110,7 +104,7 @@ def occam_features_torch(
             padding = torch.zeros(batch_size, micro_lags, device=S_t.device)
             features = torch.cat([features, padding], dim=1)
     
-    # TASK E: Append previous action if requested
+    # Append previous action if requested
     if include_prev_action:
         if a_prev is None:
             # Default to zero for t=0

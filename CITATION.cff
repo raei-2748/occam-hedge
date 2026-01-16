@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Occam's Hedge Under Relative Entropy Uncertainty"
+authors:
+  - family-names: "Wang"
+    given-names: "Ray"
+    email: "raywang886@gmail.com"
+repository-code: "https://github.com/raywang886/occam-hedge"
+url: "https://github.com/raywang886/occam-hedge"
+abstract: "Research prototype for investigating regime-dependent semantic inversion in hedging policies under information constraints."
+keywords:
+  - hedging
+  - information theory
+  - variational inference
+  - regime switching
+  - deep learning
+license: MIT
+version: 1.0.0
+date-released: 2026-01-13

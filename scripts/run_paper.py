@@ -62,7 +62,14 @@ def main():
     parser.add_argument("--shifted_phi_r1", type=float, default=0.8,
                         help="Shifted AR(1) coefficient for robustness testing (default: 0.8)")
     
-    # Eval balanced regimes
+    # Adversarial Features
+    parser.add_argument("--simulation_mode", type=str, choices=["normal", "adversarial"], default="normal",
+                        help="Use normal Heston or Adversarial (Jumps + Markov) simulator")
+    parser.add_argument("--jump_intensity", type=float, default=0.0,
+                        help="Poisson jump intensity for price and toxicity shocks")
+    parser.add_argument("--adaptive_beta_gamma", type=float, default=0.0,
+                        help="Sensitivity for volatility-weighted adaptive information cost")
+    
     parser.add_argument("--eval_balanced_regimes", action="store_true", default=True,
                         help="Use 50/50 regime balance for evaluation (default: True)")
     
@@ -150,94 +157,126 @@ def main():
         
         print(f"\n--- Seed {seed_idx+1}/{args.seeds} [Train={current_train_seed}, Eval={current_eval_seed}] ---")
         
-        # 2a. Data Generation with mixed-regime training (Task 3)
-        n_paths_train = int(cfg["n_paths_train"])
-        
-        if args.regime_mix_p < 1.0 and args.regime_mix_p > 0.0:
-            # Mixed-regime training for competence trap
-            n_r0 = int(n_paths_train * args.regime_mix_p)
-            n_r1 = n_paths_train - n_r0
-            
-            set_seeds(current_train_seed)
-            S_r0, _, V_r0, lam_r0, _ = simulate_heston_signflip(
-                regime=0, n_paths=n_r0, n_steps=n_steps, T=T, seed=current_train_seed,
-                vol_noise_scale=0.30,
-                leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
-            )
-            S_r1, _, V_r1, lam_r1, _ = simulate_heston_signflip(
-                regime=1, n_paths=n_r1, n_steps=n_steps, T=T, seed=current_train_seed + 5000,
-                vol_noise_scale=0.30,
-                leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
-            )
-            
-            # Concatenate training data
-            S_train = np.vstack([S_r0, S_r1])
-            V_train = np.vstack([V_r0, V_r1])
-            lam_train = np.vstack([lam_r0, lam_r1])
-            
-            # Shuffle to avoid temporal ordering bias
-            idx = np.random.permutation(n_paths_train)
-            S_train = S_train[idx]
-            V_train = V_train[idx]
-            lam_train = lam_train[idx]
-            
-            print(f"  Mixed-regime training: R0={n_r0}, R1={n_r1} (mix_p={args.regime_mix_p})")
+        # --- 2. DATA GENERATION ---
+        from world import simulate_heston_signflip, simulate_heston_adversarial
+
+        if args.simulation_mode == "adversarial":
+             # Adversarial Mode (Jumps + Switches)
+             S_train, v_train, V_train, lam_train, R_train, _ = simulate_heston_adversarial(
+                 n_paths=int(cfg["n_paths_train"]),
+                 n_steps=n_steps, T=T, seed=current_train_seed,
+                 jump_intensity=args.jump_intensity, 
+                 alpha_jump_intensity=args.jump_intensity,
+                 vol_noise_scale=0.30
+             )
+             
+             # Eval (Adversarial)
+             S_eval, _, V_eval, lam_eval, R_eval, _ = simulate_heston_adversarial(
+                 n_paths=int(cfg["n_paths_eval"]),
+                 n_steps=n_steps, T=T, seed=current_eval_seed,
+                 jump_intensity=args.jump_intensity,
+                 alpha_jump_intensity=args.jump_intensity,
+                 vol_noise_scale=0.30
+             )
+             
+             # Placeholders for broken/shifted (not applicable to adversarial yet)
+             S_eval_broken = S_eval
+             V_eval_broken = V_eval
+             lam_eval_broken = lam_eval
+             S_eval_shifted = S_eval
+             V_eval_shifted = V_eval
+             lam_eval_shifted = lam_eval
+             
+             # Stress (Regime 1 forced)
+             S_stress, _, V_stress, lam_stress, _, _ = simulate_heston_adversarial(
+                 n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
+                 prior_0=0.0, # Force R1
+                 jump_intensity=args.jump_intensity,
+                 alpha_jump_intensity=args.jump_intensity,
+                 vol_noise_scale=0.30
+             )
+             S_stress_broken = S_stress
+             V_stress_broken = V_stress
+             lam_stress_broken = lam_stress
+             S_stress_shifted = S_stress
+             V_stress_shifted = V_stress
+             lam_stress_shifted = lam_stress
+
         else:
-            # Original single-regime training (backward compatible)
-            set_seeds(current_train_seed)
-            S_train, _, V_train, lam_train, _ = simulate_heston_signflip(
-                regime=0, n_paths=n_paths_train, n_steps=n_steps, T=T, seed=current_train_seed,
-                vol_noise_scale=0.30,
-                leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
-            )
-        
-        set_seeds(current_eval_seed)
-        S_eval, _, V_eval, lam_eval, _ = simulate_heston_signflip(
-            regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed,
-            vol_noise_scale=0.30,
-            leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
-        )
-        
-        # TASK 4: Generate eval data under BROKEN leak (φ=0 for both regimes)
-        # This tests if model relies on temporal signal
-        S_eval_broken, _, V_eval_broken, lam_eval_broken, _ = simulate_heston_signflip(
-            regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed,
-            vol_noise_scale=0.30,
-            leak_phi_r0=0.0, leak_phi_r1=0.0  # Broken: no temporal signal
-        )
-        
-        # TASK 4: Generate eval data under SHIFTED leak (φ increased)
-        # This tests robustness to distribution shift
-        S_eval_shifted, _, V_eval_shifted, lam_eval_shifted, _ = simulate_heston_signflip(
-            regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed,
-            vol_noise_scale=0.30,
-            leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.shifted_phi_r1  # Shifted: stronger temporal signal
-        )
-        
-        # 2b. Semantic Flip Check (Regime 0 vs Regime 1)
-        # Generate Regime 1 batch for correlation check and stress testing (MATCHED leak)
-        S_stress, _, V_stress, lam_stress, _ = simulate_heston_signflip(
-            regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
-            vol_noise_scale=0.30,
-            leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
-        )
-        
-        # Regime 1 under BROKEN leak (for robustness comparison)
-        S_stress_broken, _, V_stress_broken, lam_stress_broken, _ = simulate_heston_signflip(
-            regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
-            vol_noise_scale=0.30,
-            leak_phi_r0=0.0, leak_phi_r1=0.0
-        )
-        
-        # Regime 1 under SHIFTED leak
-        S_stress_shifted, _, V_stress_shifted, lam_stress_shifted, _ = simulate_heston_signflip(
-            regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
-            vol_noise_scale=0.30,
-            leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.shifted_phi_r1
-        )
-        
-        # Calculate correlations (Volume vs Lambda)
-        # Helper to compute flatten correlation
+             # Normal Mode
+             n_paths_train = int(cfg["n_paths_train"])
+             
+             if args.regime_mix_p < 1.0 and args.regime_mix_p > 0.0:
+                 n_r0 = int(n_paths_train * args.regime_mix_p)
+                 n_r1 = n_paths_train - n_r0
+                 
+                 set_seeds(current_train_seed)
+                 S_r0, v_r0, V_r0, lam_r0, _ = simulate_heston_signflip(
+                     regime=0, n_paths=n_r0, n_steps=n_steps, T=T, seed=current_train_seed,
+                     vol_noise_scale=0.30,
+                     leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
+                 )
+                 S_r1, v_r1, V_r1, lam_r1, _ = simulate_heston_signflip(
+                     regime=1, n_paths=n_r1, n_steps=n_steps, T=T, seed=current_train_seed + 5000,
+                     vol_noise_scale=0.30,
+                     leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
+                 )
+                 S_train = np.vstack([S_r0, S_r1])
+                 V_train = np.vstack([V_r0, V_r1])
+                 lam_train = np.vstack([lam_r0, lam_r1])
+                 v_train = np.vstack([v_r0, v_r1])
+                 
+                 idx = np.random.permutation(n_paths_train)
+                 S_train = S_train[idx]
+                 V_train = V_train[idx]
+                 lam_train = lam_train[idx]
+                 v_train = v_train[idx]
+                 
+                 print(f"  Mixed-regime training: R0={n_r0}, R1={n_r1} (mix_p={args.regime_mix_p})")
+             else:
+                 set_seeds(current_train_seed)
+                 S_train, v_train, V_train, lam_train, _ = simulate_heston_signflip(
+                     regime=0, n_paths=n_paths_train, n_steps=n_steps, T=T, seed=current_train_seed,
+                     vol_noise_scale=0.30,
+                     leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
+                 )
+             
+             set_seeds(current_eval_seed)
+             S_eval, _, V_eval, lam_eval, _ = simulate_heston_signflip(
+                 regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed,
+                 vol_noise_scale=0.30,
+                 leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
+             )
+             
+             S_eval_broken, _, V_eval_broken, lam_eval_broken, _ = simulate_heston_signflip(
+                 regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed,
+                 vol_noise_scale=0.30,
+                 leak_phi_r0=0.0, leak_phi_r1=0.0
+             )
+             
+             S_eval_shifted, _, V_eval_shifted, lam_eval_shifted, _ = simulate_heston_signflip(
+                 regime=0, n_paths=int(cfg["n_paths_eval"]), n_steps=n_steps, T=T, seed=current_eval_seed,
+                 vol_noise_scale=0.30,
+                 leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.shifted_phi_r1
+             )
+             
+             S_stress, _, V_stress, lam_stress, _ = simulate_heston_signflip(
+                 regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
+                 vol_noise_scale=0.30,
+                 leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.leak_phi_r1
+             )
+             S_stress_broken, _, V_stress_broken, lam_stress_broken, _ = simulate_heston_signflip(
+                 regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
+                 vol_noise_scale=0.30,
+                 leak_phi_r0=0.0, leak_phi_r1=0.0
+             )
+             S_stress_shifted, _, V_stress_shifted, lam_stress_shifted, _ = simulate_heston_signflip(
+                 regime=1, n_paths=1000, n_steps=n_steps, T=T, seed=current_eval_seed + 9999,
+                 vol_noise_scale=0.30,
+                 leak_phi_r0=args.leak_phi_r0, leak_phi_r1=args.shifted_phi_r1
+             )
+
+        # Calculate correlations
         def calc_corr(V, L):
             return np.corrcoef(V.flatten(), L.flatten())[0, 1]
             
@@ -267,7 +306,9 @@ def main():
                     micro_lags=args.micro_lags,
                     include_prev_action=args.include_prev_action,
                     n_epochs=int(cfg.get("n_epochs", 150)),
-                    warmup_epochs=int(cfg.get("warmup_epochs", 30))
+                    warmup_epochs=int(cfg.get("warmup_epochs", 30)),
+                    v_paths=v_train,
+                    adaptive_beta_gamma=args.adaptive_beta_gamma
                 )
                 
                 # Fingerprint
@@ -298,7 +339,8 @@ def main():
                 
                 # Phase 3 Mechanism Diagnostic: Eval on Stress Regime 1 for Turnover Concentration
                 diag_metrics = evaluate_path_diagnostics(
-                    S_stress, V_stress, lam_stress, T, K, vol_hat, rep, w
+                    S_stress, V_stress, lam_stress, T, K, vol_hat, rep, w,
+                    micro_lags=args.micro_lags, include_prev_action=args.include_prev_action
                 )
                 diag_results.append({
                     "representation": rep,
@@ -440,10 +482,6 @@ def main():
         curves_export.append({
             "representation": rep,
             "beta": float(beta),
-            "etas": cfg["eta_grid_compare"], # Wait, eta_grid_compare or eta_grid? Logic above used eta_grid_curves.
-            # Original code used eta_grid_curves which came from cfg["beta_grid_curves"]? NO.
-            # eta_grid_curves = cfg["eta_grid"]. logic at line 89.
-            # So I should use eta_grid_curves.
             "etas": eta_grid_curves.tolist(),
             "R_eta_mean": means.tolist(),
             "R_eta_std": stds.tolist()

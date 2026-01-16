@@ -51,9 +51,9 @@ def run_oracle_test():
     
     # Training Parameters
     beta = 0.0 
-    train_eta = 0.05
-    train_lambdas = [1.0] 
-    gamma = 0.05
+    train_eta = 0.0  # Match paper
+    train_lambdas = [0.01]  # Match paper
+    gamma = 0.95  # Match paper (was 0.05 - bug!)
     
     print(" Training Oracle Policy (beta=0.0, 100 epochs)...")
     weights = train_weights(
@@ -67,18 +67,46 @@ def run_oracle_test():
         n_epochs=100
     )
     
-    print(" Evaluating...")
-    losses, info, _, _ = hedge_on_paths(
-        S, V, lam, T, K, vol_hat, 
+    print(" Evaluating on Regime 0...")
+    losses_r0, _, _, _, _ = hedge_on_paths(
+        S0, V0, lam0, T, K, vol_hat, 
         representation="oracle", 
         weights_or_state_dict=weights,
-        R=torch.tensor(R, dtype=torch.float32, device=device)
+        R=torch.zeros((n_paths_per_regime, n_steps), dtype=torch.float32, device=device)
     )
+    r0_oracle = expected_shortfall(losses_r0, gamma=gamma)
     
-    es_95 = expected_shortfall(losses, gamma=0.95)
-    print(f" Oracle Aggregate ES_0.95: {es_95:.4f}")
+    print(" Evaluating on Regime 1...")
+    losses_r1, _, _, _, _ = hedge_on_paths(
+        S1, V1, lam1, T, K, vol_hat, 
+        representation="oracle", 
+        weights_or_state_dict=weights,
+        R=torch.ones((n_paths_per_regime, n_steps), dtype=torch.float32, device=device)
+    )
+    r1_oracle = expected_shortfall(losses_r1, gamma=gamma)
     
-    success = es_95 < 2.0
+    deg_oracle = r1_oracle / r0_oracle
+    
+    print(f"\n Oracle Results:")
+    print(f"   R0 (Regime 0): {r0_oracle:.4f}")
+    print(f"   R1 (Regime 1): {r1_oracle:.4f}")
+    print(f"   Degradation:   {deg_oracle:.2f}")
+    
+    # Save results
+    import json
+    results = {
+        "R0": float(r0_oracle),
+        "R1": float(r1_oracle),
+        "Deg": float(deg_oracle),
+        "gamma": gamma,
+        "representation": "oracle"
+    }
+    output_path = ROOT / "results" / "oracle_test_results.json"
+    with open(output_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"\n Saved results to: {output_path}")
+    
+    success = deg_oracle < 1.10  # Oracle should reduce degradation
     print(f" Result: {'✅ SUCCESS' if success else '❌ FAILURE'}")
     return success
 
